@@ -34,7 +34,8 @@ def presign(event, user_id):
     ext = file_name.rsplit(".", 1)[-1] if "." in file_name else "txt"
     s3_key = f"uploads/{user_id}/{doc_id}/source.{ext}"
 
-    s3 = boto3.client("s3", region_name=os.environ.get("REGION", "us-east-2"))
+    region = os.environ.get("REGION", "us-east-2")
+    s3 = boto3.client("s3", region_name=region, endpoint_url=f"https://s3.{region}.amazonaws.com")
     bucket = os.environ.get("DOCS_BUCKET", "vida-docs")
 
     presigned = s3.generate_presigned_url(

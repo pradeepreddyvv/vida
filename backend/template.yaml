@@ -88,6 +88,12 @@ Resources:
     DeletionPolicy: Retain
     Properties:
       BucketName: !Ref DocsBucketName
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: ["*"]
+            AllowedMethods: [GET, PUT, POST]
+            AllowedHeaders: ["*"]
+            MaxAge: 3600
 
   # ─── Lambda: vida-api (public, all HTTP routes) ───────────────
 

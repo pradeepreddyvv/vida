@@ -29,7 +29,7 @@ python3 -m samcli deploy \
 echo "Getting stack outputs..."
 OUTPUTS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --profile "$PROFILE" --query "Stacks[0].Outputs" --output json)
 
-FRONTEND_BUCKET=$(echo "$OUTPUTS" | python3 -c "import sys,json; [print(o['OutputValue']) for o in json.load(sys.stdin) if o['OutputKey']=='FrontendBucketName']")
+FRONTEND_BUCKET="vida-frontend-042170206023"
 CF_DOMAIN=$(echo "$OUTPUTS" | python3 -c "import sys,json; [print(o['OutputValue']) for o in json.load(sys.stdin) if o['OutputKey']=='CloudFrontDomain']")
 CF_DIST_ID=$(echo "$OUTPUTS" | python3 -c "import sys,json; [print(o['OutputValue']) for o in json.load(sys.stdin) if o['OutputKey']=='CloudFrontDistributionId']")
 API_URL=$(echo "$OUTPUTS" | python3 -c "import sys,json; [print(o['OutputValue']) for o in json.load(sys.stdin) if o['OutputKey']=='ApiUrl']")

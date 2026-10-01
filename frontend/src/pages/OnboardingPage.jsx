@@ -1,8 +1,8 @@
 import { useState, useRef, useCallback } from 'react'
-import { Upload, FileText, Check, ChevronRight, Loader2, Sparkles, X, User, Target, ListTodo, Repeat, AlertCircle } from 'lucide-react'
+import { Upload, FileText, Check, ChevronRight, Loader2, Sparkles, X, User, Target, ListTodo, Repeat, AlertCircle, MessageSquare, Calendar, BookOpen, Mic } from 'lucide-react'
 import { api, pollJob } from '../lib/api'
 
-const STEPS = ['Upload', 'Review', 'Confirm']
+const STEPS = ['Input', 'Review', 'Confirm']
 
 const PHASE_OPTIONS = [
   { value: 'student', label: 'Student' },
@@ -25,7 +25,8 @@ export default function OnboardingPage({ onComplete }) {
   const [selectedHabits, setSelectedHabits] = useState([])
   const [selectedCommitments, setSelectedCommitments] = useState([])
   const [confirmResult, setConfirmResult] = useState(null)
-  const [skipMode, setSkipMode] = useState(false)
+  const [inputMode, setInputMode] = useState(null) // null, 'file', 'text', 'skip'
+  const [textInput, setTextInput] = useState('')
   const [skipName, setSkipName] = useState('')
   const fileInputRef = useRef(null)
   const dropRef = useRef(null)
@@ -61,6 +62,22 @@ export default function OnboardingPage({ onComplete }) {
     return 'text/plain'
   }
 
+  const processExtraction = async (ext) => {
+    if (!ext) throw new Error('AI extraction returned empty')
+    setExtraction(ext)
+    setProfile({
+      name: ext.profile?.name || '',
+      role: ext.profile?.role || '',
+      summary: ext.profile?.summary || '',
+      phase: ext.profile?.phase || 'other',
+    })
+    setSelectedGoals([])
+    setSelectedTasks([])
+    setSelectedHabits([])
+    setSelectedCommitments([])
+    setStep(1)
+  }
+
   const handleUpload = async () => {
     if (!file) return
     setProcessing(true)
@@ -77,29 +94,34 @@ export default function OnboardingPage({ onComplete }) {
         body: file,
         headers: { 'Content-Type': contentTypeFor(file.name) },
       })
-      setProcessingText('Starting AI analysis...')
+      setProcessingText('AI is reading your document and extracting your profile...')
       const job = await api.post('/api/onboard/process', {
         s3_key: presign.s3_key,
         doc_id: presign.doc_id,
       })
-      setProcessingText('Analyzing your document — extracting profile, goals, and commitments...')
+      setProcessingText('Analyzing — extracting profile, goals, and commitments...')
       const result = await pollJob(job.job_id)
-      const ext = result.result?.extraction
-      if (!ext) throw new Error('AI extraction returned empty')
-      setExtraction(ext)
-      setProfile({
-        name: ext.profile?.name || '',
-        role: ext.profile?.role || '',
-        summary: ext.profile?.summary || '',
-        phase: ext.profile?.phase || 'other',
-      })
-      setSelectedGoals((ext.suggestions?.goals || []).map((_, i) => i))
-      setSelectedTasks((ext.suggestions?.tasks || []).map((_, i) => i))
-      setSelectedHabits((ext.suggestions?.habits || []).map((_, i) => i))
-      setSelectedCommitments((ext.commitments || []).map((_, i) => i))
-      setStep(1)
+      await processExtraction(result.result?.extraction)
     } catch (err) {
       setError(err.message || 'Upload failed')
+    } finally {
+      setProcessing(false)
+      setProcessingText('')
+    }
+  }
+
+  const handleTextSubmit = async () => {
+    if (!textInput.trim()) return
+    setProcessing(true)
+    setError(null)
+    try {
+      setProcessingText('AI is analyzing your input...')
+      const job = await api.post('/api/onboard/process', { text: textInput.trim() })
+      setProcessingText('Extracting profile, goals, and commitments...')
+      const result = await pollJob(job.job_id)
+      await processExtraction(result.result?.extraction)
+    } catch (err) {
+      setError(err.message || 'Processing failed')
     } finally {
       setProcessing(false)
       setProcessingText('')
@@ -186,7 +208,7 @@ export default function OnboardingPage({ onComplete }) {
       )}
 
       <div className="max-w-3xl mx-auto px-6 pb-12">
-        {step === 0 && !skipMode && (
+        {step === 0 && (
           <div className="space-y-6">
             {processing ? (
               <div className="bg-white rounded-2xl shadow-lg p-12 text-center">
@@ -194,8 +216,28 @@ export default function OnboardingPage({ onComplete }) {
                 <p className="text-lg font-medium text-gray-700">{processingText}</p>
                 <p className="text-sm text-gray-400 mt-2">This usually takes 10-30 seconds</p>
               </div>
-            ) : (
-              <>
+            ) : inputMode === 'skip' ? (
+              <div className="bg-white rounded-2xl shadow-lg p-8 space-y-6">
+                <div className="text-center">
+                  <User size={40} className="text-vida-600 mx-auto mb-3" />
+                  <h2 className="text-xl font-semibold text-gray-800">Quick Setup</h2>
+                  <p className="text-sm text-gray-500 mt-1">You can always upload a document later from the Library.</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">What should Vida call you?</label>
+                  <input type="text" value={skipName} onChange={e => setSkipName(e.target.value)} placeholder="Your name"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-vida-500 focus:border-vida-500 outline-none" autoFocus />
+                </div>
+                <div className="flex items-center justify-between">
+                  <button onClick={() => setInputMode(null)} className="text-sm text-gray-500 hover:text-gray-700 underline">Back</button>
+                  <button onClick={handleSkip} disabled={!skipName.trim() || processing}
+                    className="px-6 py-3 bg-vida-600 text-white rounded-lg font-medium hover:bg-vida-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                    {processing ? <Loader2 size={18} className="animate-spin" /> : 'Get Started'}
+                  </button>
+                </div>
+              </div>
+            ) : inputMode === 'file' ? (
+              <div className="space-y-4">
                 <div ref={dropRef} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
                   onClick={() => fileInputRef.current?.click()}
                   className="bg-white rounded-2xl shadow-lg border-2 border-dashed border-gray-300 p-12 text-center cursor-pointer hover:border-vida-400 hover:bg-vida-50/30 transition-all">
@@ -209,44 +251,109 @@ export default function OnboardingPage({ onComplete }) {
                   ) : (
                     <div className="space-y-3">
                       <Upload size={48} className="text-gray-400 mx-auto" />
-                      <p className="text-lg font-medium text-gray-600">Drop your resume, bio, or brain-dump here</p>
+                      <p className="text-lg font-medium text-gray-600">Drop your resume, goals doc, or brain-dump here</p>
                       <p className="text-sm text-gray-400">Accepts .txt, .md, .pdf</p>
                     </div>
                   )}
                 </div>
                 <div className="flex items-center justify-between">
-                  <button onClick={() => setSkipMode(true)} className="text-sm text-gray-500 hover:text-gray-700 underline">
-                    Skip — set up manually
-                  </button>
+                  <button onClick={() => { setInputMode(null); setFile(null) }} className="text-sm text-gray-500 hover:text-gray-700 underline">Back</button>
                   <button onClick={handleUpload} disabled={!file}
                     className="px-6 py-3 bg-vida-600 text-white rounded-lg font-medium hover:bg-vida-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-2">
                     <Sparkles size={18} />Analyze with AI
                   </button>
                 </div>
-              </>
-            )}
-          </div>
-        )}
+              </div>
+            ) : inputMode === 'text' ? (
+              <div className="space-y-4">
+                <div className="bg-white rounded-2xl shadow-lg p-6 space-y-4">
+                  <h3 className="text-lg font-semibold text-gray-800">Tell Vida about yourself</h3>
+                  <p className="text-sm text-gray-500">Paste your resume, describe your goals, or dump everything on your mind. Vida will organize it for you.</p>
+                  <textarea value={textInput} onChange={e => setTextInput(e.target.value)} rows={10} placeholder={"Example:\nI'm a software engineer with 3 years of experience...\nMy goals this year: learn system design, get promoted, run a half marathon...\nUpcoming deadlines: project demo on Nov 15, performance review in December..."}
+                    className="w-full px-4 py-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-vida-500 focus:border-vida-500 outline-none resize-none" autoFocus />
+                </div>
+                <div className="flex items-center justify-between">
+                  <button onClick={() => { setInputMode(null); setTextInput('') }} className="text-sm text-gray-500 hover:text-gray-700 underline">Back</button>
+                  <button onClick={handleTextSubmit} disabled={!textInput.trim()}
+                    className="px-6 py-3 bg-vida-600 text-white rounded-lg font-medium hover:bg-vida-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-2">
+                    <Sparkles size={18} />Analyze with AI
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                <div className="bg-white rounded-2xl shadow-lg p-6">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-1">How would you like to get started?</h3>
+                  <p className="text-sm text-gray-500 mb-5">Choose how to share your goals, background, and commitments with Vida.</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <button onClick={() => setInputMode('file')}
+                      className="flex flex-col items-center gap-3 p-5 rounded-xl border-2 border-gray-200 hover:border-vida-500 hover:bg-vida-50/30 transition-all text-center">
+                      <Upload size={32} className="text-vida-600" />
+                      <div>
+                        <div className="text-sm font-semibold text-gray-800">Upload a File</div>
+                        <div className="text-xs text-gray-500 mt-1">Resume, goals doc, or brain-dump (.pdf, .txt, .md)</div>
+                      </div>
+                    </button>
+                    <button onClick={() => setInputMode('text')}
+                      className="flex flex-col items-center gap-3 p-5 rounded-xl border-2 border-gray-200 hover:border-vida-500 hover:bg-vida-50/30 transition-all text-center">
+                      <MessageSquare size={32} className="text-vida-600" />
+                      <div>
+                        <div className="text-sm font-semibold text-gray-800">Type or Paste</div>
+                        <div className="text-xs text-gray-500 mt-1">Write about your goals, paste your bio, or brain-dump</div>
+                      </div>
+                    </button>
+                    <button disabled
+                      className="flex flex-col items-center gap-3 p-5 rounded-xl border-2 border-gray-200 text-center opacity-50 cursor-not-allowed relative">
+                      <Mic size={32} className="text-gray-400" />
+                      <div>
+                        <div className="text-sm font-semibold text-gray-600">Voice Input</div>
+                        <div className="text-xs text-gray-400 mt-1">Talk about your goals and Vida listens</div>
+                      </div>
+                      <span className="absolute top-2 right-2 text-[10px] bg-gray-200 text-gray-500 px-2 py-0.5 rounded-full font-medium">Soon</span>
+                    </button>
+                  </div>
+                </div>
 
-        {step === 0 && skipMode && (
-          <div className="bg-white rounded-2xl shadow-lg p-8 space-y-6">
-            <div className="text-center">
-              <User size={40} className="text-vida-600 mx-auto mb-3" />
-              <h2 className="text-xl font-semibold text-gray-800">Quick Setup</h2>
-              <p className="text-sm text-gray-500 mt-1">You can always upload a document later from the Library.</p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">What should Vida call you?</label>
-              <input type="text" value={skipName} onChange={e => setSkipName(e.target.value)} placeholder="Your name"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-vida-500 focus:border-vida-500 outline-none" autoFocus />
-            </div>
-            <div className="flex items-center justify-between">
-              <button onClick={() => setSkipMode(false)} className="text-sm text-gray-500 hover:text-gray-700 underline">Back to upload</button>
-              <button onClick={handleSkip} disabled={!skipName.trim() || processing}
-                className="px-6 py-3 bg-vida-600 text-white rounded-lg font-medium hover:bg-vida-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-                {processing ? <Loader2 size={18} className="animate-spin" /> : 'Get Started'}
-              </button>
-            </div>
+                <div className="bg-white rounded-2xl shadow-lg p-6">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-1">Connect Your Tools</h3>
+                  <p className="text-sm text-gray-500 mb-4">Let Vida pull in your existing schedule and notes for smarter planning.</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button disabled className="flex items-center gap-4 p-4 rounded-xl border-2 border-gray-200 text-left opacity-50 cursor-not-allowed relative">
+                      <Calendar size={28} className="text-blue-500 flex-shrink-0" />
+                      <div>
+                        <div className="text-sm font-semibold text-gray-700">Google Calendar</div>
+                        <div className="text-xs text-gray-400">Import events, deadlines, and meetings</div>
+                      </div>
+                      <span className="absolute top-2 right-2 text-[10px] bg-gray-200 text-gray-500 px-2 py-0.5 rounded-full font-medium">Soon</span>
+                    </button>
+                    <button disabled className="flex items-center gap-4 p-4 rounded-xl border-2 border-gray-200 text-left opacity-50 cursor-not-allowed relative">
+                      <BookOpen size={28} className="text-gray-700 flex-shrink-0" />
+                      <div>
+                        <div className="text-sm font-semibold text-gray-700">Notion</div>
+                        <div className="text-xs text-gray-400">Sync projects, tasks, and knowledge base</div>
+                      </div>
+                      <span className="absolute top-2 right-2 text-[10px] bg-gray-200 text-gray-500 px-2 py-0.5 rounded-full font-medium">Soon</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="bg-vida-50/50 rounded-xl p-4">
+                  <h4 className="text-sm font-semibold text-vida-700 mb-2">Suggestions for what to share</h4>
+                  <ul className="text-xs text-vida-600 space-y-1.5">
+                    <li>Your resume or LinkedIn bio — Vida extracts skills, experience, and career goals</li>
+                    <li>A goals document — yearly goals, quarterly OKRs, or a bucket list</li>
+                    <li>A brain-dump — everything on your mind, Vida will organize it into goals and tasks</li>
+                    <li>Deadlines and commitments — upcoming exams, project due dates, events</li>
+                  </ul>
+                </div>
+
+                <div className="text-center">
+                  <button onClick={() => setInputMode('skip')} className="text-sm text-gray-500 hover:text-gray-700 underline">
+                    Skip for now — set up manually
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -295,7 +402,13 @@ export default function OnboardingPage({ onComplete }) {
 
             {extraction.suggestions?.goals?.length > 0 && (
               <div className="bg-white rounded-2xl shadow-lg p-6 space-y-3">
-                <h3 className="text-vida-700 font-semibold flex items-center gap-2"><Target size={18} /> Suggested Goals</h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-vida-700 font-semibold flex items-center gap-2"><Target size={18} /> Suggested Goals</h3>
+                  <button onClick={() => setSelectedGoals(prev => prev.length === extraction.suggestions.goals.length ? [] : extraction.suggestions.goals.map((_, i) => i))}
+                    className="text-xs text-vida-600 hover:text-vida-800 font-medium">
+                    {selectedGoals.length === extraction.suggestions.goals.length ? 'Deselect All' : 'Select All'}
+                  </button>
+                </div>
                 <div className="space-y-2">
                   {extraction.suggestions.goals.map((g, i) => (
                     <label key={i} className="flex items-start gap-3 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
@@ -319,7 +432,13 @@ export default function OnboardingPage({ onComplete }) {
 
             {extraction.suggestions?.tasks?.length > 0 && (
               <div className="bg-white rounded-2xl shadow-lg p-6 space-y-3">
-                <h3 className="text-vida-700 font-semibold flex items-center gap-2"><ListTodo size={18} /> Suggested Tasks</h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-vida-700 font-semibold flex items-center gap-2"><ListTodo size={18} /> Suggested Tasks</h3>
+                  <button onClick={() => setSelectedTasks(prev => prev.length === extraction.suggestions.tasks.length ? [] : extraction.suggestions.tasks.map((_, i) => i))}
+                    className="text-xs text-vida-600 hover:text-vida-800 font-medium">
+                    {selectedTasks.length === extraction.suggestions.tasks.length ? 'Deselect All' : 'Select All'}
+                  </button>
+                </div>
                 <div className="space-y-2">
                   {extraction.suggestions.tasks.map((t, i) => (
                     <label key={i} className="flex items-start gap-3 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">
@@ -342,7 +461,13 @@ export default function OnboardingPage({ onComplete }) {
 
             {extraction.suggestions?.habits?.length > 0 && (
               <div className="bg-white rounded-2xl shadow-lg p-6 space-y-3">
-                <h3 className="text-vida-700 font-semibold flex items-center gap-2"><Repeat size={18} /> Suggested Habits</h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-vida-700 font-semibold flex items-center gap-2"><Repeat size={18} /> Suggested Habits</h3>
+                  <button onClick={() => setSelectedHabits(prev => prev.length === extraction.suggestions.habits.length ? [] : extraction.suggestions.habits.map((_, i) => i))}
+                    className="text-xs text-vida-600 hover:text-vida-800 font-medium">
+                    {selectedHabits.length === extraction.suggestions.habits.length ? 'Deselect All' : 'Select All'}
+                  </button>
+                </div>
                 <div className="space-y-2">
                   {extraction.suggestions.habits.map((h, i) => (
                     <label key={i} className="flex items-start gap-3 p-3 rounded-lg hover:bg-gray-50 cursor-pointer">

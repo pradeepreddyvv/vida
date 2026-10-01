@@ -312,29 +312,47 @@ def process_report_daily(user_id, job_input):
 
 # --- Onboard Process ---
 
+def _extract_text_from_s3(s3_key):
+    s3 = boto3.client("s3", region_name=os.environ.get("REGION", "us-east-2"))
+    bucket = os.environ.get("DOCS_BUCKET", "vida-docs")
+    obj = s3.get_object(Bucket=bucket, Key=s3_key)
+    raw = obj["Body"].read()
+
+    if s3_key.lower().endswith(".pdf"):
+        import io
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(raw))
+        pages = []
+        for page in reader.pages:
+            t = page.extract_text()
+            if t:
+                pages.append(t)
+        return "\n\n".join(pages)
+
+    return raw.decode("utf-8", errors="replace")
+
+
 def process_onboard(user_id, job_input):
     s3_key = job_input.get("s3_key", "")
     doc_id = job_input.get("doc_id", "")
+    raw_text = job_input.get("text", "")
 
     text = ""
     if s3_key:
-        s3 = boto3.client("s3")
-        bucket = os.environ.get("DOCS_BUCKET", "vida-docs")
         try:
-            obj = s3.get_object(Bucket=bucket, Key=s3_key)
-            text = obj["Body"].read().decode("utf-8", errors="replace")
+            text = _extract_text_from_s3(s3_key)
         except Exception as e:
             logger.error(f"Failed to read S3 object: {e}")
-            text = job_input.get("text", "")
-    else:
-        text = job_input.get("text", "")
-
     if not text:
+        text = raw_text
+
+    if not text.strip():
         return {"error": "No text content to process"}
 
     text = text[:12000]
+    today = today_str()
 
-    messages = [{"role": "user", "content": [{"text": f"Extract structured data from this document:\n\n{text}"}]}]
+    messages = [{"role": "user", "content": [{"text": f"Today's date is {today}. Extract structured data from this document:\n\n{text}"}]}]
     result = converse_json(prompts.ONBOARD_EXTRACT, messages, max_tokens=4096, temperature=0.1)
 
     return {
