@@ -19,6 +19,8 @@ DISPATCHERS = {
     "report_daily": "process_report_daily",
     "onboard_process": "process_onboard",
     "doc_process": "process_document",
+    "google_calendar_sync": "process_google_calendar_sync",
+    "notion_sync": "process_notion_sync",
 }
 
 

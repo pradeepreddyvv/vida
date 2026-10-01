@@ -13,7 +13,7 @@ logger.setLevel(logging.INFO)
 
 
 def _import_routes():
-    from api.routes import profile, goals, tasks, calendar, habits, journal, today, progress, onboard, plan, documents
+    from api.routes import profile, goals, tasks, calendar, habits, journal, today, progress, onboard, plan, documents, integrations
     return {
         ("GET", "/api/profile"): profile.get_profile,
         ("PUT", "/api/profile"): profile.put_profile,
@@ -56,6 +56,15 @@ def _import_routes():
         ("POST", "/api/documents/process"): lambda e, u: _submit_job(e, u, "doc_process"),
         ("GET", "/api/jobs/{id}"): lambda e, u: _get_job(e, u),
         ("POST", "/api/habits/{id}/log"): habits.log_habit,
+        # Integrations
+        ("GET", "/api/auth/google"): integrations.start_google_auth,
+        ("GET", "/api/auth/google/callback"): integrations.google_callback,
+        ("GET", "/api/auth/notion"): integrations.start_notion_auth,
+        ("GET", "/api/auth/notion/callback"): integrations.notion_callback,
+        ("GET", "/api/integrations"): integrations.list_integrations,
+        ("DELETE", "/api/integrations/{provider}"): integrations.disconnect_integration,
+        ("POST", "/api/integrations/google/sync"): lambda e, u: _submit_job(e, u, "google_calendar_sync"),
+        ("POST", "/api/integrations/notion/sync"): lambda e, u: _submit_job(e, u, "notion_sync"),
     }
 
 
@@ -208,6 +217,15 @@ def handler(event, context):
 
         if method == "POST" and path == "/api/session":
             return _create_session()
+
+        OAUTH_CALLBACKS = ["/api/auth/google/callback", "/api/auth/notion/callback"]
+        if path in OAUTH_CALLBACKS:
+            route_handler, params = _match_route(method, path)
+            if route_handler:
+                if params:
+                    event["_path_params"] = params
+                return route_handler(event, None)
+            return response(404, {"error": {"code": "NOT_FOUND", "message": "Not found"}})
 
         user_id = get_user_id(event)
         if not user_id:

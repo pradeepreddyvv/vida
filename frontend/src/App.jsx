@@ -6,6 +6,7 @@ import TodayPage from './pages/TodayPage'
 import PlanPage from './pages/PlanPage'
 import ProgressPage from './pages/ProgressPage'
 import LibraryPage from './pages/LibraryPage'
+import SettingsPage from './pages/SettingsPage'
 import OnboardingPage from './pages/OnboardingPage'
 
 export default function App() {
@@ -60,6 +61,7 @@ export default function App() {
         <Route path="/plan" element={<PlanPage />} />
         <Route path="/progress" element={<ProgressPage />} />
         <Route path="/library" element={<LibraryPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
         <Route path="/" element={<Navigate to="/today" replace />} />
       </Route>
     </Routes>

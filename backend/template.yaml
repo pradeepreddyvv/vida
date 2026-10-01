@@ -109,6 +109,10 @@ Resources:
         Variables:
           AI_FUNCTION_NAME: !Ref VidaAiFunction
           BEDROCK_MODEL_ID: amazon.nova-lite-v1:0
+          GOOGLE_CLIENT_ID: ""
+          GOOGLE_CLIENT_SECRET: ""
+          NOTION_CLIENT_ID: ""
+          NOTION_CLIENT_SECRET: ""
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref VidaTable
@@ -140,6 +144,10 @@ Resources:
         Variables:
           BEDROCK_MODEL_ID: amazon.nova-lite-v1:0
           BEDROCK_KB_ID: "PLACEHOLDER_SET_AFTER_KB_CREATION"
+          GOOGLE_CLIENT_ID: ""
+          GOOGLE_CLIENT_SECRET: ""
+          NOTION_CLIENT_ID: ""
+          NOTION_CLIENT_SECRET: ""
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref VidaTable

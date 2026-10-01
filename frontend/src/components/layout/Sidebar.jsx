@@ -1,11 +1,12 @@
 import { NavLink } from 'react-router-dom'
-import { Sun, Calendar, BarChart3, BookOpen } from 'lucide-react'
+import { Sun, Calendar, BarChart3, BookOpen, Settings } from 'lucide-react'
 
 const navItems = [
   { to: '/today', label: 'Today', icon: Sun },
   { to: '/plan', label: 'Plan', icon: Calendar },
   { to: '/progress', label: 'Progress', icon: BarChart3 },
   { to: '/library', label: 'Library', icon: BookOpen },
+  { to: '/settings', label: 'Settings', icon: Settings },
 ]
 
 export default function Sidebar({ profile }) {

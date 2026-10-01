@@ -452,3 +452,15 @@ def _blocks_overlap(a, b):
 def _time_to_min(t):
     h, m = map(int, t.split(":"))
     return h * 60 + m
+
+
+# --- Integration Sync ---
+
+def process_google_calendar_sync(user_id, job_input):
+    from api.routes.integrations import sync_google_calendar_worker
+    return sync_google_calendar_worker(user_id)
+
+
+def process_notion_sync(user_id, job_input):
+    from api.routes.integrations import sync_notion_worker
+    return sync_notion_worker(user_id)
