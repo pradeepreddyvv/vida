@@ -69,6 +69,52 @@ def _get_user_context(user_id, include_calendar=True):
 
 # --- Chat ---
 
+def _find_best_passage(text, query_words, window=800):
+    text_lower = text.lower()
+    best_start = 0
+    best_score = 0
+    step = 200
+    for start in range(0, max(1, len(text) - window + 1), step):
+        chunk = text_lower[start:start + window]
+        score = sum(1 for w in query_words if w in chunk)
+        if score > best_score:
+            best_score = score
+            best_start = start
+    return text[best_start:best_start + window], best_score
+
+
+def _get_document_context(user_id, query):
+    docs = query_pk(f"USER#{user_id}", sk_prefix="DOC#")
+    if not docs:
+        return ""
+
+    query_lower = query.lower()
+    query_words = set(w for w in query_lower.split() if len(w) > 2)
+    if not query_words:
+        return ""
+
+    scored = []
+    for doc in docs:
+        text = doc.get("extracted_text", "") or ""
+        title = doc.get("file_name", "")
+        source = doc.get("source", "upload")
+        if not text:
+            continue
+        passage, score = _find_best_passage(text, query_words)
+        if score > 0:
+            scored.append((score, title, source, passage))
+
+    if not scored:
+        return ""
+
+    scored.sort(key=lambda x: -x[0])
+    context = "\n\nRelevant context from your documents and integrations:\n"
+    for _, title, source, passage in scored[:3]:
+        label = f"[{source}] {title}" if source else title
+        context += f"\n--- {label} ---\n{passage}\n"
+    return context
+
+
 def process_chat(user_id, job_input):
     message = job_input.get("message", "")
     session_id = job_input.get("session_id", "default")
@@ -84,6 +130,12 @@ def process_chat(user_id, job_input):
         for r in rag_results[:3]:
             rag_context += f"- {r['text'][:500]}\n"
 
+    if not rag_context:
+        rag_context = _get_document_context(user_id, message)
+
+    integrations = query_pk(f"USER#{user_id}", sk_prefix="INTEGRATION#")
+    connected = [i.get("provider") for i in integrations if i.get("status") == "connected"]
+
     system = prompts.CHAT_SYSTEM + f"""
 
 User context:
@@ -92,6 +144,7 @@ User context:
 - Active goals: {json.dumps([g['title'] for g in ctx['goals']])}
 - Pending tasks: {len(ctx['tasks'])} tasks
 - Today's blocks: {len(ctx.get('existing_blocks', []))} scheduled
+- Connected integrations: {', '.join(connected) if connected else 'none'}
 {rag_context}"""
 
     history = query_pk(f"USER#{user_id}", sk_prefix=f"CHAT#{session_id}#", limit=20, scan_forward=False)
@@ -458,7 +511,23 @@ def _time_to_min(t):
 
 def process_google_calendar_sync(user_id, job_input):
     from api.routes.integrations import sync_google_calendar_worker
-    return sync_google_calendar_worker(user_id)
+    sync_result = sync_google_calendar_worker(user_id)
+
+    if sync_result.get("error"):
+        return sync_result
+
+    synced = sync_result.get("synced_events", 0)
+    if synced > 0:
+        try:
+            replan_result = process_plan_replan(user_id, {
+                "reason": f"Google Calendar sync: {synced} events imported",
+            })
+            sync_result["replan"] = replan_result
+        except Exception as e:
+            logger.warning(f"Auto-replan after calendar sync failed: {e}")
+            sync_result["replan_error"] = str(e)
+
+    return sync_result
 
 
 def process_notion_sync(user_id, job_input):

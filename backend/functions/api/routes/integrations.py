@@ -77,7 +77,7 @@ def start_google_auth(event, user_id):
         "state": state,
     })
     auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{params}"
-    return _redirect(auth_url)
+    return response(200, {"url": auth_url})
 
 
 def google_callback(event, _user_id):
@@ -165,7 +165,7 @@ def start_notion_auth(event, user_id):
         "state": state,
     })
     auth_url = f"https://api.notion.com/v1/oauth/authorize?{params}"
-    return _redirect(auth_url)
+    return response(200, {"url": auth_url})
 
 
 def notion_callback(event, _user_id):
@@ -320,7 +320,7 @@ def sync_google_calendar_worker(user_id):
         "timeMax": time_max,
         "singleEvents": "true",
         "orderBy": "startTime",
-        "maxResults": 100,
+        "maxResults": 250,
     })
     url = f"https://www.googleapis.com/calendar/v3/calendars/primary/events?{params}"
 
@@ -331,6 +331,11 @@ def sync_google_calendar_worker(user_id):
         return {"error": f"Failed to fetch calendar events: {str(e)}"}
 
     events = events_data.get("items", [])
+
+    existing_gcal_blocks = query_pk(f"USER#{user_id}", sk_prefix="BLOCK#gcal-")
+    existing_ids = {b["SK"].replace("BLOCK#", "") for b in existing_gcal_blocks}
+
+    synced_ids = set()
     synced = 0
 
     for ev in events:
@@ -346,10 +351,10 @@ def sync_google_calendar_worker(user_id):
         try:
             if "T" in start_dt:
                 s = datetime.fromisoformat(start_dt.replace("Z", "+00:00"))
-                e = datetime.fromisoformat(end_dt.replace("Z", "+00:00"))
+                e_dt = datetime.fromisoformat(end_dt.replace("Z", "+00:00"))
                 event_date = s.strftime("%Y-%m-%d")
                 start_time = s.strftime("%H:%M")
-                end_time = e.strftime("%H:%M")
+                end_time = e_dt.strftime("%H:%M")
             else:
                 event_date = start_dt
                 start_time = "00:00"
@@ -359,6 +364,7 @@ def sync_google_calendar_worker(user_id):
 
         gcal_id = ev.get("id", "")
         block_id = f"gcal-{gcal_id[:24]}" if gcal_id else generate_id()
+        synced_ids.add(block_id)
 
         block = build_time_block(
             user_id,
@@ -374,18 +380,52 @@ def sync_google_calendar_worker(user_id):
         put_item(block)
         synced += 1
 
+    removed = 0
+    for old_id in existing_ids - synced_ids:
+        delete_item(f"USER#{user_id}", f"BLOCK#{old_id}")
+        removed += 1
+
     from shared.db import update_item
     update_item(f"USER#{user_id}", "INTEGRATION#google_calendar", {
         "last_synced_at": now_iso(),
         "last_sync_count": synced,
     })
 
-    return {"synced_events": synced, "provider": "google_calendar"}
+    return {"synced_events": synced, "removed_events": removed, "provider": "google_calendar"}
 
 
 # ──────────────────────────────────────────────
 # Notion Sync Worker (called from agents.py)
 # ──────────────────────────────────────────────
+
+def _read_notion_blocks(block_id, headers, depth=0, max_depth=3):
+    if depth > max_depth:
+        return []
+    text_parts = []
+    cursor = None
+    while True:
+        url = f"https://api.notion.com/v1/blocks/{block_id}/children?page_size=100"
+        if cursor:
+            url += f"&start_cursor={cursor}"
+        try:
+            blocks_data = _http_request(url, headers=headers)
+        except Exception:
+            break
+        for block in blocks_data.get("results", []):
+            btype = block.get("type", "")
+            block_content = block.get(btype, {})
+            if isinstance(block_content, dict):
+                rich_texts = block_content.get("rich_text", [])
+                for rt in rich_texts:
+                    text_parts.append(rt.get("plain_text", ""))
+            if block.get("has_children"):
+                child_text = _read_notion_blocks(block["id"], headers, depth + 1, max_depth)
+                text_parts.extend(child_text)
+        if not blocks_data.get("has_more"):
+            break
+        cursor = blocks_data.get("next_cursor")
+    return text_parts
+
 
 def sync_notion_worker(user_id):
     integration = get_item(f"USER#{user_id}", "INTEGRATION#notion")
@@ -399,24 +439,35 @@ def sync_notion_worker(user_id):
         "Notion-Version": "2022-06-28",
     }
 
-    try:
-        search_body = json.dumps({"page_size": 50}).encode("utf-8")
-        req = urllib.request.Request(
-            "https://api.notion.com/v1/search",
-            data=search_body,
-            headers=headers,
-            method="POST",
-        )
-        with urllib.request.urlopen(req) as resp:
-            search_results = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        logger.error(f"Notion search error: {e}")
-        return {"error": f"Failed to search Notion: {str(e)}"}
+    all_results = []
+    cursor = None
+    for _ in range(5):
+        body = {"page_size": 100}
+        if cursor:
+            body["start_cursor"] = cursor
+        try:
+            search_body = json.dumps(body).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.notion.com/v1/search",
+                data=search_body,
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(req) as resp:
+                search_results = json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            logger.error(f"Notion search error: {e}")
+            if not all_results:
+                return {"error": f"Failed to search Notion: {str(e)}"}
+            break
+        all_results.extend(search_results.get("results", []))
+        if not search_results.get("has_more"):
+            break
+        cursor = search_results.get("next_cursor")
 
-    results = search_results.get("results", [])
     synced = 0
 
-    for item in results:
+    for item in all_results:
         obj_type = item.get("object", "")
         notion_id = item.get("id", "")
 
@@ -433,16 +484,7 @@ def sync_notion_worker(user_id):
         content_text = ""
         if obj_type == "page":
             try:
-                blocks_url = f"https://api.notion.com/v1/blocks/{notion_id}/children?page_size=100"
-                blocks_data = _http_request(blocks_url, headers=headers)
-                text_parts = []
-                for block in blocks_data.get("results", []):
-                    btype = block.get("type", "")
-                    block_content = block.get(btype, {})
-                    if isinstance(block_content, dict):
-                        rich_texts = block_content.get("rich_text", [])
-                        for rt in rich_texts:
-                            text_parts.append(rt.get("plain_text", ""))
+                text_parts = _read_notion_blocks(notion_id, headers)
                 content_text = "\n".join(text_parts)
             except Exception as e:
                 logger.warning(f"Failed to read Notion page {notion_id}: {e}")
@@ -455,7 +497,7 @@ def sync_notion_worker(user_id):
             file_name=f"{title}.md",
             file_type="md",
             s3_key="",
-            extracted_text=content_text[:10000] if content_text else title,
+            extracted_text=content_text[:15000] if content_text else title,
             kb_status="indexed",
             is_master=False,
         )

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Calendar, BookOpen, Loader2, Check, ExternalLink, RefreshCw, Link2, Unlink, User, Bell, Volume2, Globe } from 'lucide-react'
 import { api, pollJob } from '../lib/api'
 
@@ -23,12 +24,14 @@ const PLANNING_MODES = [
 ]
 
 export default function SettingsPage() {
+  const navigate = useNavigate()
   const [profile, setProfile] = useState(null)
   const [integrations, setIntegrations] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [syncing, setSyncing] = useState(null)
+  const [syncResult, setSyncResult] = useState(null)
 
   useEffect(() => {
     async function load() {
@@ -57,21 +60,31 @@ export default function SettingsPage() {
     setSaving(false)
   }
 
-  const connectGoogle = () => {
-    window.location.href = '/api/auth/google'
+  const connectGoogle = async () => {
+    try {
+      const data = await api.get('/api/auth/google')
+      if (data.url) window.location.href = data.url
+    } catch { /* error */ }
   }
 
-  const connectNotion = () => {
-    window.location.href = '/api/auth/notion'
+  const connectNotion = async () => {
+    try {
+      const data = await api.get('/api/auth/notion')
+      if (data.url) window.location.href = data.url
+    } catch { /* error */ }
   }
 
   const syncIntegration = async (provider) => {
     setSyncing(provider)
+    setSyncResult(null)
     try {
       const { job_id } = await api.post(`/api/integrations/${provider}/sync`)
-      await pollJob(job_id)
+      const result = await pollJob(job_id)
       const data = await api.get('/api/integrations').catch(() => ({ integrations: [] }))
       setIntegrations(data.integrations || [])
+      const synced = result.result?.synced_events || result.result?.synced_pages || 0
+      const replanned = !!result.result?.replan
+      setSyncResult({ provider, synced, replanned })
     } catch { /* error */ }
     setSyncing(null)
   }
@@ -100,6 +113,21 @@ export default function SettingsPage() {
         <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
         <p className="text-sm text-gray-500 mt-1">Manage your profile, integrations, and preferences</p>
       </div>
+
+      {syncResult && (
+        <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-center justify-between">
+          <div className="text-sm text-green-800">
+            <span className="font-medium">Synced {syncResult.synced} {syncResult.provider === 'google_calendar' ? 'calendar events' : 'pages'}</span>
+            {syncResult.replanned && ' — a new draft plan is ready for review'}
+          </div>
+          {syncResult.replanned && (
+            <button onClick={() => navigate('/plan')}
+              className="text-sm font-medium text-green-700 hover:text-green-900 underline">
+              View Plan
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Integrations */}
       <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
