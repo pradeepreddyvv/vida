@@ -24,26 +24,24 @@ def list_documents(event, user_id):
 def presign(event, user_id):
     body = parse_body(event)
     file_name = body.get("file_name", "document.txt")
-    file_type = body.get("file_type", "txt")
+    content_type = body.get("content_type") or body.get("file_type", "text/plain")
+    ct_map = {"pdf": "application/pdf", "md": "text/markdown", "txt": "text/plain"}
+    if content_type in ct_map:
+        content_type = ct_map[content_type]
 
     doc_id = generate_id()
-    s3_key = f"uploads/{user_id}/{doc_id}/source.{file_type}"
+    ext = file_name.rsplit(".", 1)[-1] if "." in file_name else "txt"
+    s3_key = f"uploads/{user_id}/{doc_id}/source.{ext}"
 
     s3 = boto3.client("s3", region_name=os.environ.get("REGION", "us-east-1"))
     bucket = os.environ.get("DOCS_BUCKET", "vida-docs")
-
-    content_types = {
-        "pdf": "application/pdf",
-        "md": "text/markdown",
-        "txt": "text/plain",
-    }
 
     presigned = s3.generate_presigned_url(
         "put_object",
         Params={
             "Bucket": bucket,
             "Key": s3_key,
-            "ContentType": content_types.get(file_type, "application/octet-stream"),
+            "ContentType": content_type,
         },
         ExpiresIn=600,
     )

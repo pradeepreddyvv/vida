@@ -81,7 +81,7 @@ def get_today(event, user_id):
         goal_list.append({
             "goal_id": g["SK"].replace("GOAL#", ""),
             "title": g.get("title"),
-            "progress_pct": int(g.get("progress_pct", 0)),
+            "progress_pct": int(g.get("progress_pct") or 0),
         })
 
     scheduled_minutes = sum(b.get("duration_minutes", 0) or 0 for b in blocks if b.get("SK", "").startswith("BLOCK#"))

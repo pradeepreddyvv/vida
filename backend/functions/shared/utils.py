@@ -5,8 +5,8 @@ from datetime import datetime, timezone, date
 
 
 def generate_id():
-    import ulid
-    return str(ulid.new())
+    from ulid import ULID
+    return str(ULID())
 
 
 def now_iso():

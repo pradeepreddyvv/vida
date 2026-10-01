@@ -24,8 +24,14 @@ Thumbs.db
 
 # SAM
 samconfig.toml
+.aws-sam/
+
+# Build artifacts (shared copied into function dirs)
+backend/functions/api/shared/
+backend/functions/ai/shared/
 
 # Keys (NEVER commit)
 *.pem
 *.key
 *.secret
+local/
