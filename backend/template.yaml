@@ -1,0 +1,271 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Vida AI Life Assistant
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Architectures: [arm64]
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref VidaTable
+        DOCS_BUCKET: !Ref DocsBucket
+        REGION: !Ref AWS::Region
+
+Resources:
+
+  # ─── DynamoDB ──────────────────────────────────────────────────
+
+  VidaTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: vida-main
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: PK,     AttributeType: S }
+        - { AttributeName: SK,     AttributeType: S }
+        - { AttributeName: GSI1PK, AttributeType: S }
+        - { AttributeName: GSI1SK, AttributeType: S }
+        - { AttributeName: GSI2PK, AttributeType: S }
+        - { AttributeName: GSI2SK, AttributeType: S }
+        - { AttributeName: GSI3PK, AttributeType: S }
+        - { AttributeName: GSI3SK, AttributeType: S }
+      KeySchema:
+        - { AttributeName: PK, KeyType: HASH }
+        - { AttributeName: SK, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - { AttributeName: GSI1PK, KeyType: HASH }
+            - { AttributeName: GSI1SK, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+        - IndexName: GSI2
+          KeySchema:
+            - { AttributeName: GSI2PK, KeyType: HASH }
+            - { AttributeName: GSI2SK, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+        - IndexName: GSI3
+          KeySchema:
+            - { AttributeName: GSI3PK, KeyType: HASH }
+            - { AttributeName: GSI3SK, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+
+  # ─── S3 Buckets ───────────────────────────────────────────────
+
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub vida-frontend-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
+
+  DocsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub vida-docs-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ["*"]
+            AllowedMethods: [PUT, GET]
+            AllowedOrigins: ["*"]
+            MaxAge: 3600
+
+  # ─── Lambda: vida-api (public, all HTTP routes) ───────────────
+
+  VidaApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: vida-api
+      Handler: handler.handler
+      CodeUri: functions/api/
+      MemorySize: 256
+      Timeout: 29
+      Environment:
+        Variables:
+          AI_FUNCTION_NAME: !Ref VidaAiFunction
+          BEDROCK_MODEL_ID: amazon.nova-lite-v1:0
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref VidaTable
+        - S3CrudPolicy:
+            BucketName: !Ref DocsBucket
+        - Statement:
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt VidaAiFunction.Arn
+      Events:
+        CatchAll:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref VidaHttpApi
+            Path: /api/{proxy+}
+            Method: ANY
+
+  # ─── Lambda: vida-ai (internal async worker, no HTTP) ─────────
+
+  VidaAiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: vida-ai
+      Handler: handler.handler
+      CodeUri: functions/ai/
+      MemorySize: 512
+      Timeout: 90
+      Environment:
+        Variables:
+          BEDROCK_MODEL_ID: amazon.nova-lite-v1:0
+          BEDROCK_KB_ID: "PLACEHOLDER_SET_AFTER_KB_CREATION"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref VidaTable
+        - S3CrudPolicy:
+            BucketName: !Ref DocsBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+                - bedrock:InvokeModelWithResponseStream
+              Resource: "arn:aws:bedrock:*::foundation-model/*"
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:Retrieve
+                - bedrock:StartIngestionJob
+              Resource: !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*"
+        - SSMParameterReadPolicy:
+            ParameterName: "vida/*"
+
+  # ─── API Gateway (HTTP API) ───────────────────────────────────
+
+  VidaHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: prod
+      CorsConfiguration:
+        AllowOrigins: ["*"]
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+          - X-User-Id
+        AllowMethods: [GET, POST, PUT, DELETE, OPTIONS]
+
+  # ─── CloudFront ───────────────────────────────────────────────
+
+  SpaRewriteFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: vida-spa-rewrite
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Rewrite S3 404/403 paths to /index.html for SPA routing
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          var uri = request.uri;
+          // If the URI has a file extension, serve it as-is (assets)
+          if (uri.includes('.')) {
+            return request;
+          }
+          // Otherwise rewrite to /index.html for SPA routing
+          request.uri = '/index.html';
+          return request;
+        }
+
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: vida-frontend-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+            OriginAccessControlId: !Ref CloudFrontOAC
+          - Id: ApiOrigin
+            DomainName: !Sub "${VidaHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+            CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+            OriginPath: /prod
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+          Compress: true
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt SpaRewriteFunction.FunctionARN
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: ApiOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # AllViewerExceptHostHeader
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+
+# CloudFront forwards /api/* unchanged to API GW.
+# API GW stage is "prod", so OriginPath /prod means:
+#   Browser: /api/goals → CF: /api/goals → Origin: /prod/api/goals
+#   API GW stage "prod" strips /prod → Lambda sees rawPath: /api/goals
+# The SPA rewrite function only applies to the default (S3) behavior,
+# so API requests are never rewritten to index.html.
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint
+    Value: !Sub "https://${VidaHttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+  FrontendBucketName:
+    Description: S3 bucket for frontend assets
+    Value: !Ref FrontendBucket
+  DocsBucketName:
+    Description: S3 bucket for user documents
+    Value: !Ref DocsBucket
+  CloudFrontDomain:
+    Description: CloudFront distribution domain name
+    Value: !GetAtt CloudFrontDistribution.DomainName
+  CloudFrontDistributionId:
+    Description: CloudFront distribution ID for cache invalidation
+    Value: !Ref CloudFrontDistribution
+  TableName:
+    Description: DynamoDB table name
+    Value: !Ref VidaTable
+  AiFunctionName:
+    Description: AI worker Lambda function name
+    Value: !Ref VidaAiFunction
