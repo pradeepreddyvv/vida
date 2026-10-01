@@ -6,7 +6,7 @@ BACKEND_DIR="$PROJECT_DIR/backend"
 FRONTEND_DIR="$PROJECT_DIR/frontend"
 PROFILE="hackathon"
 STACK_NAME="vida"
-REGION="us-east-1"
+REGION="us-east-2"
 
 echo "=== Vida Deploy ==="
 
@@ -16,13 +16,14 @@ echo "=== Vida Deploy ==="
 # --- SAM Deploy ---
 echo "Deploying backend..."
 cd "$BACKEND_DIR"
-sam deploy \
+python3 -m samcli deploy \
   --stack-name "$STACK_NAME" \
-  --resolve-s3 \
+  --s3-bucket vida-sam-deploy-042170206023 \
   --capabilities CAPABILITY_IAM \
   --region "$REGION" \
   --profile "$PROFILE" \
-  --no-confirm-changeset
+  --no-confirm-changeset \
+  --no-fail-on-empty-changeset
 
 # --- Get outputs ---
 echo "Getting stack outputs..."

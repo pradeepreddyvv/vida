@@ -94,7 +94,8 @@ User context:
 - Today's blocks: {len(ctx.get('existing_blocks', []))} scheduled
 {rag_context}"""
 
-    history = query_pk(f"USER#{user_id}", sk_prefix=f"CHAT#{session_id}#", limit=20)
+    history = query_pk(f"USER#{user_id}", sk_prefix=f"CHAT#{session_id}#", limit=20, scan_forward=False)
+    history.reverse()
     chat_history = [{"role": h.get("role"), "content": h.get("content")} for h in history if h.get("role") in ("user", "assistant")]
 
     reply = chat_turn(system, message, history=chat_history[:-1] if chat_history else None, max_tokens=1024)
@@ -260,7 +261,7 @@ def process_report_daily(user_id, job_input):
 
     completed_blocks = [b for b in block_list if b.get("status") == "completed"]
     tasks_done = query_gsi("GSI1", f"USER#{user_id}", sk_prefix="TASKSTATUS#done#")
-    today_done = [t for t in tasks_done if t.get("completed_at", "").startswith(date)]
+    today_done = [t for t in tasks_done if (t.get("completed_at") or "").startswith(date)]
 
     habits = query_pk(f"USER#{user_id}", sk_prefix="HABIT#")
     logs = query_pk(f"USER#{user_id}", sk_prefix=f"HABITLOG#{date}#")
@@ -347,13 +348,12 @@ def process_onboard(user_id, job_input):
 
 def process_document(user_id, job_input):
     doc_id = job_input.get("doc_id", "")
-    s3_key = job_input.get("s3_key", "")
 
     doc = get_item(f"USER#{user_id}", f"DOC#{doc_id}")
     if not doc:
         return {"error": "Document not found"}
 
-    s3_key = s3_key or doc.get("s3_key", "")
+    s3_key = doc.get("s3_key", "")
     s3 = boto3.client("s3")
     bucket = os.environ.get("DOCS_BUCKET", "vida-docs")
 

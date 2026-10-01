@@ -13,7 +13,7 @@ logger.setLevel(logging.INFO)
 
 
 def _import_routes():
-    from routes import profile, goals, tasks, calendar, habits, journal, today, progress, onboard, plan, documents
+    from api.routes import profile, goals, tasks, calendar, habits, journal, today, progress, onboard, plan, documents
     return {
         ("GET", "/api/profile"): profile.get_profile,
         ("PUT", "/api/profile"): profile.put_profile,
@@ -44,6 +44,7 @@ def _import_routes():
         ("GET", "/api/plan/current"): plan.get_current_plan,
         ("POST", "/api/plan/accept"): plan.accept_plan,
         ("GET", "/api/documents"): documents.list_documents,
+        ("POST", "/api/documents"): documents.create_document,
         ("POST", "/api/documents/presign"): documents.presign,
         ("GET", "/api/chat/history"): lambda e, u: _chat_history(e, u),
         # Async job submission routes
@@ -148,7 +149,9 @@ def _chat_history(event, user_id):
         f"USER#{user_id}",
         sk_prefix=f"CHAT#{session_id}#",
         limit=50,
+        scan_forward=False,
     )
+    items.reverse()
     messages = [
         {
             "role": item.get("role"),
@@ -176,8 +179,9 @@ def _create_session():
     put_item(profile)
 
     put_item({
-        "PK": f"USER#{user_id}",
-        "SK": f"SESSION#{token_hash}",
+        "PK": "SESSIONS",
+        "SK": f"TOKEN#{token_hash}",
+        "user_id": user_id,
         "created_at": now_iso(),
     })
 
@@ -191,7 +195,13 @@ def _create_session():
 def handler(event, context):
     try:
         method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
-        path = event.get("rawPath", "/")
+        raw_path = event.get("rawPath", "/")
+        stage = event.get("requestContext", {}).get("stage", "")
+        path = raw_path
+        if stage and raw_path.startswith(f"/{stage}"):
+            path = raw_path[len(f"/{stage}"):]
+        if not path.startswith("/"):
+            path = "/" + path
 
         if method == "OPTIONS":
             return response(200, {})
@@ -200,6 +210,9 @@ def handler(event, context):
             return _create_session()
 
         user_id = get_user_id(event)
+        if not user_id:
+            return response(401, {"error": {"code": "UNAUTHORIZED", "message": "Missing or invalid authentication"}})
+
         route_handler, params = _match_route(method, path)
 
         if not route_handler:

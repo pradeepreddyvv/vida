@@ -1,4 +1,4 @@
-from shared.db import query_pk, get_item, put_item
+from shared.db import query_pk, query_gsi, get_item, put_item, batch_write
 from shared.utils import response, parse_body, today_str, now_iso
 
 
@@ -39,24 +39,33 @@ def accept_plan(event, user_id):
     if plan.get("status") != "draft":
         return response(409, {"error": {"code": "CONFLICT", "message": f"Plan is {plan.get('status')}, not draft"}})
 
+    items_to_write = []
+
     for p in plans:
         if p.get("status") == "accepted" and p.get("SK") != plan.get("SK"):
             p["status"] = "superseded"
-            put_item(p)
+            items_to_write.append(p)
 
     plan["status"] = "accepted"
     plan["accepted_at"] = now_iso()
-    put_item(plan)
+    items_to_write.append(plan)
 
-    from shared.db import batch_write
+    existing_blocks = query_gsi("GSI2", f"USER#{user_id}", sk_prefix=f"DATE#{date}#BLOCK")
+    completed_block_ids = set()
+    for b in existing_blocks:
+        if b.get("status") in ("completed", "in_progress") or b.get("locked"):
+            completed_block_ids.add(b["SK"].replace("BLOCK#", ""))
+
     blocks = plan.get("blocks", [])
     if blocks:
         from shared.models import build_time_block
-        block_items = []
         for b in blocks:
+            bid = b.get("block_id")
+            if bid in completed_block_ids:
+                continue
             item = build_time_block(
                 user_id,
-                block_id=b.get("block_id"),
+                block_id=bid,
                 date=date,
                 start_time=b.get("start_time"),
                 end_time=b.get("end_time"),
@@ -67,8 +76,9 @@ def accept_plan(event, user_id):
                 source="planner",
                 plan_id=plan.get("plan_id"),
             )
-            block_items.append(item)
-        batch_write(block_items)
+            items_to_write.append(item)
+
+    batch_write(items_to_write)
 
     return response(200, {
         "plan": _format_plan(plan),

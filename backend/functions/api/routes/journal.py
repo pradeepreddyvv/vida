@@ -36,7 +36,7 @@ def create_journal(event, user_id):
     if not body.get("entry_text"):
         return response(400, {"error": {"code": "VALIDATION_ERROR", "message": "entry_text is required"}})
 
-    date = body.get("date", today_str())
+    date = body.pop("date", None) or today_str()
     item = build_journal(user_id, date, **body)
     put_item(item)
 

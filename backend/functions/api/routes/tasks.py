@@ -55,6 +55,11 @@ def update_task(event, user_id):
     updates = {k: v for k, v in body.items() if k in allowed}
     updates["updated_at"] = now_iso()
 
+    if updates.get("status") == "done" and existing.get("status") != "done":
+        updates["completed_at"] = now_iso()
+    elif updates.get("status") and updates["status"] != "done":
+        updates["completed_at"] = None
+
     existing.update(updates)
 
     status = existing.get("status", "todo")

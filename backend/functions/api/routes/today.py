@@ -28,7 +28,7 @@ def get_today(event, user_id):
             "estimated_minutes": t.get("estimated_minutes", 30),
             "goal_id": t.get("goal_id"),
         }
-        dd = t.get("due_date", "9999-12-31")
+        dd = t.get("due_date") or "9999-12-31"
         if dd < date:
             overdue.append(task)
         elif dd == date:
@@ -57,6 +57,8 @@ def get_today(event, user_id):
     logs = query_pk(f"USER#{user_id}", sk_prefix=f"HABITLOG#{date}#")
     log_set = set()
     for log in logs:
+        if not log.get("completed", False):
+            continue
         parts = log.get("SK", "").split("#")
         if len(parts) >= 3:
             log_set.add(parts[2])

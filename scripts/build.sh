@@ -16,7 +16,7 @@ cp -r "$BACKEND_DIR/functions/shared" "$BACKEND_DIR/functions/ai/shared"
 # --- SAM Build ---
 echo "Running SAM build..."
 cd "$BACKEND_DIR"
-sam build --profile hackathon
+python3 -m samcli build
 
 # --- Frontend Build ---
 echo "Building frontend..."

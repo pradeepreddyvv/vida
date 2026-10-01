@@ -207,8 +207,16 @@ function AddForm({ tab, onClose, onAdded }) {
         const fileInput = document.getElementById('doc-upload')
         if (!fileInput?.files?.[0]) return
         const file = fileInput.files[0]
-        const presign = await api.post('/api/documents/presign', { file_name: file.name, file_type: file.name.split('.').pop(), file_size_bytes: file.size })
+        const ext = file.name.split('.').pop()
+        const presign = await api.post('/api/documents/presign', { file_name: file.name, file_type: ext, file_size_bytes: file.size })
         await fetch(presign.upload_url, { method: 'PUT', body: file, headers: { 'Content-Type': file.type || 'application/octet-stream' } })
+        await api.post('/api/documents', {
+          doc_id: presign.doc_id,
+          file_name: file.name,
+          file_type: ext,
+          file_size_bytes: file.size,
+          s3_key: presign.s3_key,
+        })
       }
       onAdded()
     } catch (err) { alert(err.message) }

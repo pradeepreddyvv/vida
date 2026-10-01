@@ -13,13 +13,13 @@ def _get_client():
     if _bedrock is None:
         _bedrock = boto3.client(
             "bedrock-runtime",
-            region_name=os.environ.get("REGION", "us-east-1"),
+            region_name=os.environ.get("REGION", "us-east-2"),
         )
     return _bedrock
 
 
 def converse(system_prompt, messages, model_id=None, max_tokens=2048, temperature=0.3):
-    model_id = model_id or os.environ.get("BEDROCK_MODEL_ID", "amazon.nova-lite-v1:0")
+    model_id = model_id or os.environ.get("BEDROCK_MODEL_ID", "us.amazon.nova-lite-v1:0")
     client = _get_client()
 
     kwargs = {
@@ -69,7 +69,7 @@ def chat_turn(system_prompt, user_message, history=None, max_tokens=1024):
 
 
 def retrieve_from_kb(query, kb_id=None, top_k=5):
-    kb_id = kb_id or os.environ.get("KB_ID", "")
+    kb_id = kb_id or os.environ.get("BEDROCK_KB_ID") or os.environ.get("KB_ID", "")
     if not kb_id:
         logger.warning("No Knowledge Base ID configured, skipping RAG retrieve")
         return []

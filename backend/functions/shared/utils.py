@@ -5,8 +5,9 @@ from datetime import datetime, timezone, date
 
 
 def generate_id():
-    from ulid import ULID
-    return str(ULID())
+    import uuid
+    ts = int(time.time() * 1000)
+    return f"{ts:013x}-{uuid.uuid4().hex[:12]}"
 
 
 def now_iso():
@@ -42,13 +43,20 @@ def parse_body(event):
 
 
 def get_user_id(event):
+    import hashlib
     headers = event.get("headers", {})
+    auth = headers.get("authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[7:]
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        from shared.db import get_item
+        session = get_item("SESSIONS", f"TOKEN#{token_hash}")
+        if session:
+            return session.get("user_id")
     user_id = headers.get("x-user-id") or headers.get("X-User-Id")
-    if not user_id:
-        auth = headers.get("authorization", "")
-        if auth.startswith("Bearer "):
-            user_id = auth[7:]
-    return user_id or "anonymous"
+    if user_id:
+        return user_id
+    return None
 
 
 def get_path_param(event, name):

@@ -1,6 +1,7 @@
 import os
 import boto3
-from shared.db import query_pk
+from shared.db import query_pk, put_item
+from shared.models import build_document
 from shared.utils import response, parse_body, generate_id
 
 
@@ -33,7 +34,7 @@ def presign(event, user_id):
     ext = file_name.rsplit(".", 1)[-1] if "." in file_name else "txt"
     s3_key = f"uploads/{user_id}/{doc_id}/source.{ext}"
 
-    s3 = boto3.client("s3", region_name=os.environ.get("REGION", "us-east-1"))
+    s3 = boto3.client("s3", region_name=os.environ.get("REGION", "us-east-2"))
     bucket = os.environ.get("DOCS_BUCKET", "vida-docs")
 
     presigned = s3.generate_presigned_url(
@@ -51,4 +52,28 @@ def presign(event, user_id):
         "doc_id": doc_id,
         "s3_key": s3_key,
         "file_name": file_name,
+    })
+
+
+def create_document(event, user_id):
+    body = parse_body(event)
+    doc_id = body.get("doc_id")
+    if not doc_id:
+        return response(400, {"error": {"code": "VALIDATION_ERROR", "message": "doc_id is required"}})
+
+    item = build_document(
+        user_id,
+        doc_id=doc_id,
+        file_name=body.get("file_name", "document"),
+        file_type=body.get("file_type", "txt"),
+        file_size_bytes=body.get("file_size_bytes", 0),
+        s3_key=body.get("s3_key", ""),
+        is_master=body.get("is_master", False),
+    )
+    put_item(item)
+
+    return response(201, {
+        "doc_id": doc_id,
+        "file_name": body.get("file_name"),
+        "kb_status": "pending",
     })
