@@ -22,6 +22,43 @@ Sample tasks, notes, a Notion-style page, and a calendar stay inside an isolated
 - Daily planning drafts with selected priorities and conflict checks.
 - Google Calendar and Notion integrations for separately authorized personal workspaces.
 
+## See Vida in action
+
+These screenshots show the running application, not mockups. The four-step walkthrough uses fictional data in an isolated test workspace; its Calendar and Notion-style changes stay inside Vida.
+
+### 1. Start with a Saturday brain dump
+
+An editable starter turns groceries, laundry, notes, and a walk into a request you can review.
+
+![Vida sample workspace with the Saturday starter in the side chat](judge-evidence/01-workspace.png)
+
+### 2. Review before approving
+
+Vida separates the request into five proposed changes. Expand the details to inspect each step before approval.
+
+![Five proposed changes awaiting approval in Vida](judge-evidence/02-approval-preview.png)
+
+### 3. Open the completed results
+
+The completion summary links to saved tasks, notes, and the sample schedule.
+
+![Five completed sample changes with links to their results](judge-evidence/03-completed-results.png)
+
+### 4. Ask about what you saved
+
+“What’s on my shopping list?” retrieves the saved groceries with source references.
+
+![Vida answering a shopping-list question from saved context with sources](judge-evidence/04-saved-context.png)
+
+<details>
+<summary>Real integration example: an appended Notion checklist</summary>
+
+This separate screenshot shows existing test content in the actual Notion app, observed after earlier personal-workspace integration tests. It is not an external write from the sample walkthrough above, nor a new execution recorded during screenshot capture.
+
+![Actual Notion page containing appended Vida test notes and a Saturday reset checklist](judge-evidence/real-integrations/03-notion-appended-checklist.png)
+
+</details>
+
 ## Architecture
 
 React/Vite → CloudFront/S3 → API Gateway → Python Lambda → DynamoDB.
