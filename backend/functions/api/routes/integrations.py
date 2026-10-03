@@ -40,6 +40,15 @@ def _configure_callback(event):
             NOTION_REDIRECT_URI = base + "/api/auth/notion/callback"
 
 
+    # A provider's registered callback must not change with the hosting origin.
+    google_override = os.environ.get("GOOGLE_REDIRECT_URI", "").strip()
+    if google_override:
+        parsed = urllib.parse.urlparse(google_override)
+        if parsed.scheme != 'https' or not parsed.netloc or parsed.query or parsed.fragment or parsed.username or parsed.password or not parsed.path.endswith('/api/auth/google/callback'):
+            raise ValueError('GOOGLE_REDIRECT_URI must be an HTTPS Google callback URL without query parameters or fragments.')
+        GOOGLE_REDIRECT_URI = google_override
+
+
 def _redirect(url):
     return {
         "statusCode": 302,
