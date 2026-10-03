@@ -1,0 +1,247 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Vida approved background workflows and completion pub/sub. Reuses existing workers; no data resources are replaced.",
+  "Metadata": {
+    "AWS::CloudFormation::Interface": {},
+    "CreatedBy": "Codex with aws-cloudformation skill"
+  },
+  "Parameters": {
+    "ApiArn": {
+      "Type": "String",
+      "AllowedPattern": "arn:aws:lambda:.*"
+    },
+    "WorkerArn": {
+      "Type": "String",
+      "AllowedPattern": "arn:aws:lambda:.*"
+    },
+    "ApiRoleName": {
+      "Type": "String",
+      "AllowedPattern": "[A-Za-z0-9+=,.@_-]+"
+    }
+  },
+  "Resources": {
+    "Bus": {
+      "Type": "AWS::Events::EventBus",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-events"
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Publish and persist per-step activity notifications",
+          "must": [
+            "Do not broaden access beyond the supplied Vida functions and this account.",
+            "Do not replace existing application data."
+          ]
+        }
+      }
+    },
+    "ExecutionRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "states.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": {
+                    "Ref": "AWS::AccountId"
+                  }
+                },
+                "ArnLike": {
+                  "aws:SourceArn": {
+                    "Fn::Sub": "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:*"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "InvokeWorkerAndNotify",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "lambda:InvokeFunction",
+                  "Resource": {
+                    "Ref": "WorkerArn"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "events:PutEvents",
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "Bus",
+                      "Arn"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Approved background execution",
+          "must": [
+            "Do not broaden access beyond the supplied Vida functions and this account.",
+            "Do not replace existing application data."
+          ]
+        }
+      }
+    },
+    "Workflow": {
+      "Type": "AWS::StepFunctions::StateMachine",
+      "Properties": {
+        "StateMachineType": "STANDARD",
+        "RoleArn": {
+          "Fn::GetAtt": [
+            "ExecutionRole",
+            "Arn"
+          ]
+        },
+        "DefinitionString": "{\"StartAt\": \"ExecuteApprovedSteps\", \"TimeoutSeconds\": 1200, \"States\": {\"ExecuteApprovedSteps\": {\"Type\": \"Map\", \"ItemsPath\": \"$.steps\", \"MaxConcurrency\": 2, \"Iterator\": {\"StartAt\": \"Execute\", \"States\": {\"Execute\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::lambda:invoke\", \"Parameters\": {\"FunctionName\": \"${WorkerArn}\", \"Payload\": {\"operation\": \"workflow_step\", \"user_id.$\": \"$.user_id\", \"workflow_id.$\": \"$.workflow_id\", \"action_id.$\": \"$.action_id\"}}, \"ResultSelector\": {\"user_id.$\": \"$.Payload.user_id\", \"workflow_id.$\": \"$.Payload.workflow_id\", \"action_id.$\": \"$.Payload.action_id\", \"status.$\": \"$.Payload.status\"}, \"ResultPath\": \"$.result\", \"TimeoutSeconds\": 180, \"Retry\": [{\"ErrorEquals\": [\"Lambda.ServiceException\", \"Lambda.AWSLambdaException\", \"Lambda.SdkClientException\", \"Lambda.TooManyRequestsException\"], \"IntervalSeconds\": 2, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Catch\": [{\"ErrorEquals\": [\"States.ALL\"], \"ResultPath\": \"$.error\", \"Next\": \"Uncertain\"}], \"Next\": \"Publish\"}, \"Uncertain\": {\"Type\": \"Pass\", \"Parameters\": {\"user_id.$\": \"$.user_id\", \"workflow_id.$\": \"$.workflow_id\", \"action_id.$\": \"$.action_id\", \"status\": \"needs_review\"}, \"ResultPath\": \"$.result\", \"Next\": \"Publish\"}, \"Publish\": {\"Type\": \"Task\", \"Resource\": \"arn:aws:states:::events:putEvents\", \"Parameters\": {\"Entries\": [{\"Source\": \"vida.workflow\", \"DetailType\": \"StepFinished\", \"EventBusName\": \"${BusName}\", \"Detail.$\": \"States.JsonToString($.result)\"}]}, \"ResultPath\": null, \"Retry\": [{\"ErrorEquals\": [\"States.ALL\"], \"IntervalSeconds\": 2, \"MaxAttempts\": 3, \"BackoffRate\": 2}], \"Catch\": [{\"ErrorEquals\": [\"States.ALL\"], \"ResultPath\": null, \"Next\": \"Done\"}], \"Next\": \"Done\"}, \"Done\": {\"Type\": \"Succeed\"}}}, \"End\": true}}}",
+        "DefinitionSubstitutions": {
+          "WorkerArn": {
+            "Ref": "WorkerArn"
+          },
+          "BusName": {
+            "Ref": "Bus"
+          }
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Approved background execution",
+          "must": [
+            "Do not broaden access beyond the supplied Vida functions and this account.",
+            "Do not replace existing application data."
+          ]
+        }
+      }
+    },
+    "ApiStartPolicy": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyName": {
+          "Fn::Sub": "${AWS::StackName}-start"
+        },
+        "Roles": [
+          {
+            "Ref": "ApiRoleName"
+          }
+        ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "states:StartExecution",
+              "Resource": {
+                "Ref": "Workflow"
+              }
+            }
+          ]
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Approved background execution",
+          "must": [
+            "Do not broaden access beyond the supplied Vida functions and this account.",
+            "Do not replace existing application data."
+          ]
+        }
+      }
+    },
+    "CompletionRule": {
+      "Type": "AWS::Events::Rule",
+      "Properties": {
+        "EventBusName": {
+          "Ref": "Bus"
+        },
+        "EventPattern": {
+          "source": [
+            "vida.workflow"
+          ],
+          "detail-type": [
+            "StepFinished"
+          ]
+        },
+        "Targets": [
+          {
+            "Arn": {
+              "Ref": "ApiArn"
+            },
+            "Id": "VidaActivity",
+            "RetryPolicy": {
+              "MaximumRetryAttempts": 10,
+              "MaximumEventAgeInSeconds": 3600
+            }
+          }
+        ]
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Publish and persist per-step activity notifications",
+          "must": [
+            "Do not broaden access beyond the supplied Vida functions and this account.",
+            "Do not replace existing application data."
+          ]
+        }
+      }
+    },
+    "NotifyPermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "ApiArn"
+        },
+        "Principal": "events.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "CompletionRule",
+            "Arn"
+          ]
+        },
+        "SourceAccount": {
+          "Ref": "AWS::AccountId"
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Publish and persist per-step activity notifications",
+          "must": [
+            "Do not broaden access beyond the supplied Vida functions and this account.",
+            "Do not replace existing application data."
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "WorkflowArn": {
+      "Value": {
+        "Ref": "Workflow"
+      }
+    },
+    "EventBusName": {
+      "Value": {
+        "Ref": "Bus"
+      }
+    }
+  }
+}

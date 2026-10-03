@@ -53,18 +53,30 @@ def converse_json(system_prompt, messages, model_id=None, max_tokens=2048, tempe
     if raw.endswith("```"):
         raw = raw[:-3]
     raw = raw.strip()
-    return json.loads(raw)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Vida could not read the AI response. Please try again; no plan was applied.") from exc
+    if not isinstance(parsed, dict): raise ValueError("Vida received an incomplete AI response. Please try again.")
+    return parsed
 
 
 def chat_turn(system_prompt, user_message, history=None, max_tokens=1024):
     messages = []
-    if history:
-        for msg in history:
-            messages.append({
-                "role": msg["role"],
-                "content": [{"text": msg["content"]}],
-            })
-    messages.append({"role": "user", "content": [{"text": user_message}]})
+    # A bounded history can start halfway through a turn. Bedrock requires a
+    # user first; receipts and retried requests can also repeat a role.
+    for msg in [*(history or []), {"role": "user", "content": user_message}]:
+        role, text = msg.get("role"), msg.get("content")
+        if role not in ("user", "assistant") or not isinstance(text, str) or not text.strip():
+            continue
+        if not messages and role != "user":
+            continue
+        if messages and messages[-1]["role"] == role:
+            messages[-1]["content"][0]["text"] += "\n\n" + text
+        else:
+            messages.append({"role": role, "content": [{"text": text}]})
+    if not messages:
+        raise ValueError("Enter a message for Vida.")
     return converse(system_prompt, messages, max_tokens=max_tokens)
 
 

@@ -3,10 +3,12 @@ import logging
 import os
 import sys
 import traceback
+import time
+import math
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from shared.db import get_item, update_item
+from shared.db import get_item, update_item, _get_table
 from shared.utils import now_iso
 
 logger = logging.getLogger()
@@ -14,6 +16,7 @@ logger.setLevel(logging.INFO)
 
 DISPATCHERS = {
     "chat": "process_chat",
+    "action_execute": "process_action_execute",
     "plan_generate": "process_plan_generate",
     "plan_replan": "process_plan_replan",
     "report_daily": "process_report_daily",
@@ -25,6 +28,13 @@ DISPATCHERS = {
 
 
 def handler(event, context):
+    if event.get('operation') == 'notion_mirror':
+        from shared.notion_mirror import sync
+        return sync(event['user_id'])
+
+    if event.get('operation') == 'workflow_step':
+        from api.routes.workflows import run_step
+        return run_step(event)
     job_id = event.get("job_id")
     user_id = event.get("user_id")
     job_type = event.get("job_type")
@@ -44,10 +54,17 @@ def handler(event, context):
         logger.warning(f"Job {job_id} not pending, status={job.get('status')}")
         return {"status": job.get("status")}
 
-    update_item(f"USER#{user_id}", f"JOB#{job_id}", {
-        "status": "processing",
-        "updated_at": now_iso(),
-    })
+    remaining = math.ceil(context.get_remaining_time_in_millis()/1000) if context else 180
+    table = _get_table()
+    try:
+        table.update_item(Key={"PK":f"USER#{user_id}", "SK":f"JOB#{job_id}"},
+            UpdateExpression="SET #s = :running, updated_at = :now, deadline = :deadline, #stage = :stage",
+            ConditionExpression="#s = :pending",
+            ExpressionAttributeNames={"#s":"status", "#stage":"stage"},
+            ExpressionAttributeValues={":running":"processing", ":pending":"pending", ":now":now_iso(), ":deadline":int(time.time())+remaining+10, ":stage":"Checking your saved context"})
+    except table.meta.client.exceptions.ConditionalCheckFailedException:
+        return {"status":"already_claimed"}
+    job_type = job.get("type", job.get("job_type", job_type))
 
     try:
         func_name = DISPATCHERS.get(job_type)
@@ -56,7 +73,12 @@ def handler(event, context):
 
         from shared import agents
         processor = getattr(agents, func_name)
-        result = processor(user_id, job.get("input", {}))
+        from shared.planning_lock import agent_lock
+        from shared.job_progress import tracking
+        with agent_lock(user_id, resource=job_type, lease_seconds=remaining+10), tracking(user_id, job_id):
+            result = processor(user_id, job.get("input", {}))
+        if isinstance(result, dict) and result.get("error"):
+            raise ValueError(result["error"])
 
         update_item(f"USER#{user_id}", f"JOB#{job_id}", {
             "status": "completed",

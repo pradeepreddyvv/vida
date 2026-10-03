@@ -3,7 +3,7 @@ from shared.utils import response, today_str
 
 
 def get_today(event, user_id):
-    date = today_str()
+    date = today_str(user_id)
 
     profile = get_item(f"USER#{user_id}", "PROFILE")
     if not profile:
@@ -102,7 +102,7 @@ def get_today(event, user_id):
 
     priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     all_actionable = overdue + due_today + active_tasks
-    all_actionable.sort(key=lambda t: (priority_order.get(t.get("priority", "medium"), 2), t.get("due_date", "9999-12-31")))
+    all_actionable.sort(key=lambda t: (priority_order.get(t.get("priority", "medium"), 2), (t.get("due_date") or "9999-12-31")))
     next_action = all_actionable[0] if all_actionable else None
 
     return response(200, {
@@ -114,6 +114,7 @@ def get_today(event, user_id):
         "blocks": today_blocks,
         "overdue_tasks": overdue,
         "due_today_tasks": due_today,
+        "other_tasks": active_tasks,
         "habits": habit_list,
         "goals": goal_list,
         "current_plan": current_plan,

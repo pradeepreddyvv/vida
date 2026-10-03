@@ -52,7 +52,7 @@ def get_progress(event, user_id):
 
 def list_reports(event, user_id):
     limit = int(get_query_param(event, "limit", "14"))
-    items = query_gsi("GSI2", f"USER#{user_id}", sk_prefix="DATE#", limit=200, scan_forward=False)
+    items = query_pk(f"USER#{user_id}", sk_prefix="REPORT#", limit=limit, scan_forward=False)
     reports = [i for i in items if "REPORT" in i.get("GSI2SK", "")][:limit]
 
     result = []

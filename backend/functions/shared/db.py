@@ -1,4 +1,6 @@
 import os
+import json
+from decimal import Decimal
 import boto3
 from boto3.dynamodb.conditions import Key
 
@@ -14,12 +16,22 @@ def _get_table():
 
 
 def get_item(pk, sk):
-    resp = _get_table().get_item(Key={"PK": pk, "SK": sk})
+    resp = _get_table().get_item(Key={"PK": pk, "SK": sk}, ConsistentRead=True)
     return resp.get("Item")
 
 
+def normalize(value):
+    if isinstance(value, float):
+        return Decimal(str(value))
+    if isinstance(value, dict):
+        return {k: normalize(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [normalize(v) for v in value]
+    return value
+
+
 def put_item(item):
-    _get_table().put_item(Item=item)
+    _get_table().put_item(Item=normalize(item))
 
 
 def delete_item(pk, sk):
@@ -41,16 +53,17 @@ def update_item(pk, sk, updates):
         Key={"PK": pk, "SK": sk},
         UpdateExpression="SET " + ", ".join(expr_parts),
         ExpressionAttributeNames=names,
-        ExpressionAttributeValues=values,
+        ExpressionAttributeValues=normalize(values),
     )
 
 
-def query_pk(pk, sk_prefix=None, limit=100, scan_forward=True):
+def query_pk(pk, sk_prefix=None, limit=100, scan_forward=True, consistent=False):
     table = _get_table()
     kwargs = {
         "KeyConditionExpression": Key("PK").eq(pk),
         "Limit": limit,
         "ScanIndexForward": scan_forward,
+        "ConsistentRead": consistent,
     }
     if sk_prefix:
         kwargs["KeyConditionExpression"] = kwargs["KeyConditionExpression"] & Key("SK").begins_with(sk_prefix)
@@ -97,4 +110,4 @@ def batch_write(items):
     table = _get_table()
     with table.batch_writer() as batch:
         for item in items:
-            batch.put_item(Item=item)
+            batch.put_item(Item=normalize(item))

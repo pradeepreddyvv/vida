@@ -1,4 +1,4 @@
-from shared.db import query_gsi, put_item
+from shared.db import query_gsi, query_pk, put_item
 from shared.models import build_journal
 from shared.utils import response, parse_body, get_query_param, today_str
 
@@ -10,8 +10,7 @@ def list_journal(event, user_id):
     if date:
         items = query_gsi("GSI2", f"USER#{user_id}", sk_prefix=f"DATE#{date}#JOURNAL")
     else:
-        items = query_gsi("GSI2", f"USER#{user_id}", sk_prefix="DATE#", limit=limit)
-        items = [i for i in items if "JOURNAL" in i.get("GSI2SK", "")]
+        items = query_pk(f"USER#{user_id}", sk_prefix="JOURNAL#", limit=limit, scan_forward=False)
 
     entries = []
     for item in items:

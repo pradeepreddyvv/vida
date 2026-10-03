@@ -4,7 +4,7 @@ from shared.utils import response, parse_body, get_path_param, get_query_param, 
 
 
 def get_calendar(event, user_id):
-    date = get_query_param(event, "date", today_str())
+    date = get_query_param(event, "date", today_str(user_id))
     end_date = get_query_param(event, "end_date", date)
 
     items = query_gsi(
@@ -33,6 +33,8 @@ def create_block(event, user_id):
     if body["block_type"] not in ("busy", "task", "break", "buffer"):
         return response(400, {"error": {"code": "VALIDATION_ERROR", "message": "block_type must be: busy, task, break, buffer"}})
 
+    from shared.plan_validation import validate
+    validate([body], [])
     item = build_time_block(user_id, **body)
     put_item(item)
 

@@ -1,126 +1,74 @@
-# Vida — AI Life Assistant with Personal RAG
+# Vida
 
-An intelligent life management assistant that uses AWS Bedrock (Amazon Nova Lite) and a multi-agent pipeline to help users plan their day, track goals, build habits, and stay accountable — all powered by their own documents and context.
+Turn scattered tasks, notes, and calendar commitments into changes you can review and approve.
 
-**Live:** [https://dieldwu0y5z3o.cloudfront.net](https://dieldwu0y5z3o.cloudfront.net)
+**[Try the isolated demo](https://dahb851px2bik.cloudfront.net/test)** · **[Live app](https://dahb851px2bik.cloudfront.net)**
+
+## Try it in two minutes
+
+1. Choose **Try Vida with sample data** and a fictional profile.
+2. In Ask Vida, choose **Try organizing my Saturday**.
+3. Send the editable prompt and review the five changes before approving.
+4. Open the saved results, then ask **“What’s on my shopping list?”**
+
+Sample tasks, notes, a Notion-style page, and a calendar stay inside an isolated Vida workspace. Nothing syncs to personal Google or Notion accounts. Real integrations require a separate personal workspace and authorization.
+
+## What works
+
+- Task, project, habit, note, and schedule management.
+- Saved-context retrieval with source passages.
+- AI request classification and reviewable multi-action proposals.
+- Explicit approval, background execution, individual saved results, and repeat-approval protection.
+- Daily planning drafts with selected priorities and conflict checks.
+- Google Calendar and Notion integrations for separately authorized personal workspaces.
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                     CloudFront (CDN)                         │
-│  ┌──────────────┐                    ┌────────────────────┐  │
-│  │  S3: Frontend │ ← static assets   │ API Gateway (HTTP) │  │
-│  │  React + Vite │                    │   /api/* → Lambda  │  │
-│  └──────────────┘                    └────────┬───────────┘  │
-└───────────────────────────────────────────────┼──────────────┘
-                                                │
-                    ┌───────────────────────────┼──────────┐
-                    │           vida-api (Lambda)          │
-                    │  Session auth · 43 routes · Job mgmt │
-                    │  Async invokes vida-ai for AI work   │
-                    └───────────┬──────────────────────────┘
-                                │ async invoke
-                    ┌───────────▼──────────────────────────┐
-                    │           vida-ai (Lambda)            │
-                    │  Multi-agent pipeline · Bedrock Nova  │
-                    │  Planner → Reviewer → Validator       │
-                    └───────────┬──────────────────────────┘
-                                │
-              ┌─────────────────┼─────────────────┐
-              │                 │                  │
-     ┌────────▼──────┐  ┌──────▼──────┐  ┌───────▼──────┐
-     │  DynamoDB      │  │   Bedrock   │  │  S3: Docs    │
-     │  vida-main     │  │  Nova Lite  │  │  User files  │
-     │  Single-table  │  │  Converse   │  │  RAG source  │
-     │  3 GSIs        │  │  API        │  │              │
-     └────────────────┘  └─────────────┘  └──────────────┘
+React/Vite → CloudFront/S3 → API Gateway → Python Lambda → DynamoDB.
+Amazon Bedrock handles AI requests. Step Functions runs approved workflow steps with concurrency two. EventBridge records completion notifications; the browser polls persisted progress.
+
+See [judge evidence](JUDGE_EVIDENCE.md) for the diagram, verification scope, and screenshots, and [deployment notes](AWS_DEPLOYMENT.md) for the existing stack.
+
+## Repository layout
+
+- `sites/vida/` — current deployed React frontend.
+- `backend/functions/api/` — authenticated workspace routes and approval endpoints.
+- `backend/functions/ai/` — asynchronous AI/job handler.
+- `backend/functions/shared/` — retrieval, planning, validation, and sample workspace logic.
+- `backend/tests/` — backend regression tests.
+- `backend/hosting.yaml`, `backend/template-sites.yaml`, `backend/workflows.json` — deployment definitions.
+- `scripts/` — build, hosting, and integration configuration helpers.
+- `frontend/` — earlier frontend retained for history; use `sites/vida/` for current work.
+
+## Local frontend
+
+Requires Node.js and an accessible Vida backend; this is not a fully offline app.
+
+```sh
+npm --prefix sites/vida ci
+cp sites/vida/.env.example sites/vida/.env.local
+# Set VITE_API_URL in .env.local to your own backend/CloudFront base URL.
+npm --prefix sites/vida run dev
 ```
 
-## Features
+Use an empty `VITE_API_URL` for same-origin deployed hosting. Never put provider secrets into frontend variables.
 
-- **AI Chat** — Context-aware assistant that knows your goals, tasks, habits, and documents via RAG
-- **Smart Day Planner** — Multi-agent pipeline: Planner (creates schedule) → Reviewer (validates) → Validator (checks overlaps/conflicts) → Executor (saves blocks)
-- **Goal & Task Tracking** — CRUD with priority, due dates, estimated time, and progress tracking
-- **Habit Builder** — Daily habit tracking with streak counting and completion logging
-- **Journal** — Freeform entries with mood tracking, organized by date
-- **Document Library** — Upload documents (PDF, MD, TXT) for personal RAG context
-- **Onboarding** — Upload a resume or bio; AI extracts profile, goals, tasks, and habits automatically
-- **Daily Reports** — AI-generated end-of-day summaries comparing planned vs. actual
+## Backend checks
 
-## Tech Stack
+Requires Python 3.11. Tests use mocked AWS resources.
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | React 18, Vite, Tailwind CSS, Lucide icons |
-| API | AWS API Gateway HTTP API (v2) |
-| Compute | AWS Lambda (Python 3.11, ARM64) |
-| Database | Amazon DynamoDB (single-table, on-demand, 3 GSIs) |
-| AI | Amazon Bedrock — Nova Lite (`amazon.nova-lite-v1:0`) |
-| Storage | Amazon S3 (frontend hosting + document storage) |
-| CDN | Amazon CloudFront (OAC + SPA rewrite function) |
-| IaC | AWS SAM (CloudFormation) |
-
-## Multi-Agent Pipeline
-
-The planner uses a code-orchestrated multi-agent design:
-
-1. **Router** (code) — classifies request type and dispatches to the right agent
-2. **Planner** (AI, temp 0.3) — generates a time-blocked daily schedule considering tasks, goals, availability, and existing locked blocks
-3. **Reviewer** (AI, temp 0.2) — validates the plan for conflicts, overcommitment, and missing breaks; can request one repair cycle
-4. **Validator** (code) — programmatic checks for time overlaps, locked block conflicts, and duration limits
-5. **Executor** (code) — sole writer to DynamoDB; accepts only validated plans
-
-## API Design
-
-- **Session-based auth** — `POST /api/session` creates a server-issued bearer token (SHA-256 hashed, stored in DynamoDB)
-- **Async AI jobs** — AI-intensive operations (chat, plan generation, reports) are submitted as jobs via `POST`, processed asynchronously by vida-ai Lambda, and polled via `GET /api/jobs/{id}`
-- **43 routes** covering profiles, goals, tasks, calendar blocks, habits, journal, documents, plans, reports, and chat
-
-## Project Structure
-
-```
-├── backend/
-│   ├── template.yaml          # SAM template (IaC)
-│   └── functions/
-│       ├── shared/            # Shared modules (db, ai, models, utils, prompts, agents)
-│       ├── api/               # vida-api Lambda (handler + 11 route modules)
-│       └── ai/                # vida-ai Lambda (async worker)
-├── frontend/
-│   └── src/
-│       ├── pages/             # TodayPage, PlanPage, ProgressPage, LibraryPage, OnboardingPage
-│       ├── components/        # AppShell, Sidebar, ChatPanel
-│       └── lib/               # API client, session management
-└── scripts/
-    ├── build.sh               # Copy shared modules + SAM build + frontend build
-    └── deploy.sh              # Full deploy pipeline
+```sh
+python3.11 -m venv .venv
+.venv/bin/pip install -r backend/functions/requirements.txt 'moto[dynamodb,s3]>=5,<6'
+.venv/bin/python -m unittest discover -s backend/tests -q
+npm --prefix sites/vida run build
+sam build --template-file backend/template-sites.yaml
 ```
 
-## Deployment
+Deployment needs your own AWS credentials, Bedrock access, stack configuration, and provider OAuth configuration. Review deployment notes before running scripts; deployment creates or updates billable resources. Do not commit credentials or copy another person's OAuth tokens.
 
-```bash
-# Prerequisites: AWS CLI, SAM CLI, Node.js, Python 3.11
-# Configure: aws configure --profile hackathon
+## Limits
 
-# Build everything
-./scripts/build.sh
+This hackathon prototype uses temporary 24-hour browser sessions, not permanent account sign-in. Retrieval is lexical, not a vector database. Personal calendar import covers seven days. AI may require clarification; uncertain external results require review. Sample Notion/calendar operations cover note append and event creation. No universal rich-page editing, continuous two-way sync, automatic recovery guarantee, or measured productivity gain is claimed.
 
-# Deploy
-./scripts/deploy.sh
-```
-
-All infrastructure is managed via SAM/CloudFormation in `us-east-2`. Resources use `DeletionPolicy: Retain` for data safety.
-
-## AWS Services Used
-
-- **Amazon Bedrock** — Nova Lite model for all AI reasoning (chat, planning, review, extraction, reports)
-- **AWS Lambda** — Two functions: vida-api (256MB, 29s) for HTTP routes, vida-ai (512MB, 90s) for async AI work
-- **Amazon DynamoDB** — Single-table design with 3 GSIs for efficient access patterns
-- **Amazon S3** — Two buckets: frontend hosting and document storage
-- **Amazon CloudFront** — CDN with OAC for S3 and API origin routing
-- **AWS API Gateway** — HTTP API (v2) with CORS support
-- **AWS IAM** — Least-privilege roles for each Lambda function
-
-## Built For
-
-[AWS "Zero to Shipped" Hackathon](https://awszerotoshipped.devpost.com/) — October 2026
+The original planning/design documents describe broader intentions; deployed behavior and the verification notes are the current reference. No contest eligibility or score is guaranteed.

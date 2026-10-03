@@ -13,6 +13,9 @@ def build_profile(user_id, **kwargs):
         "user_type": kwargs.get("user_type", "both"),
         "timezone": kwargs.get("timezone"),
         "availability": kwargs.get("availability", {}),
+        "planning_focus_task_ids": kwargs.get("planning_focus_task_ids", []),
+        "day_start": kwargs.get("day_start", "09:00"),
+        "day_end": kwargs.get("day_end", "17:00"),
         "planning_mode": kwargs.get("planning_mode", "balanced"),
         "key_dates": kwargs.get("key_dates", []),
         "onboarded": kwargs.get("onboarded", False),
@@ -168,7 +171,7 @@ def build_journal(user_id, date, **kwargs):
 
 def build_chat_message(user_id, session_id, role, content, **kwargs):
     from shared.utils import timestamp_ms
-    ts_ms = timestamp_ms()
+    ts_ms = timestamp_ms() + "-" + generate_id()
     ts = now_iso()
     date = today_str()
     return {

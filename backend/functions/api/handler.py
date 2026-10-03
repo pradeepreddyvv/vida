@@ -13,8 +13,11 @@ logger.setLevel(logging.INFO)
 
 
 def _import_routes():
-    from api.routes import profile, goals, tasks, calendar, habits, journal, today, progress, onboard, plan, documents, integrations
+    from api.routes import workflows
+    from api.routes import profile, goals, tasks, calendar, habits, journal, today, progress, onboard, plan, documents, integrations, speech, actions
     return {
+        ("POST", "/api/workflows/approve"): workflows.start,
+        ("GET", "/api/workflows"): workflows.list_workflows,
         ("GET", "/api/profile"): profile.get_profile,
         ("PUT", "/api/profile"): profile.put_profile,
         ("PUT", "/api/profile/availability"): profile.put_availability,
@@ -42,11 +45,17 @@ def _import_routes():
         ("POST", "/api/onboard/presign"): onboard.presign,
         ("POST", "/api/onboard/confirm"): onboard.confirm,
         ("GET", "/api/plan/current"): plan.get_current_plan,
+        ("GET", "/api/plan/context"): plan.get_context,
+        ("GET", "/api/integrations/google_calendar/calendars"): integrations.list_google_calendars,
+        ("PUT", "/api/integrations/google_calendar/calendars"): integrations.select_google_calendars,
         ("POST", "/api/plan/accept"): plan.accept_plan,
         ("GET", "/api/documents"): documents.list_documents,
         ("POST", "/api/documents"): documents.create_document,
+        ("POST", "/api/notes"): documents.create_note,
         ("POST", "/api/documents/presign"): documents.presign,
         ("GET", "/api/chat/history"): lambda e, u: _chat_history(e, u),
+        ("POST", "/api/actions/{id}/confirm"): actions.confirm,
+        ("GET", "/api/assistant/capabilities"): actions.capabilities,
         # Async job submission routes
         ("POST", "/api/chat"): lambda e, u: _submit_job(e, u, "chat"),
         ("POST", "/api/plan/generate"): lambda e, u: _submit_job(e, u, "plan_generate"),
@@ -63,8 +72,11 @@ def _import_routes():
         ("GET", "/api/auth/notion/callback"): integrations.notion_callback,
         ("GET", "/api/integrations"): integrations.list_integrations,
         ("DELETE", "/api/integrations/{provider}"): integrations.disconnect_integration,
-        ("POST", "/api/integrations/google/sync"): lambda e, u: _submit_job(e, u, "google_calendar_sync"),
+        ("POST", "/api/integrations/google_calendar/sync"): lambda e, u: _submit_job(e, u, "google_calendar_sync"),
         ("POST", "/api/integrations/notion/sync"): lambda e, u: _submit_job(e, u, "notion_sync"),
+        # Speech
+        ("POST", "/api/speech/synthesize"): speech.synthesize_speech,
+        ("GET", "/api/speech/transcribe-config"): speech.get_transcribe_config,
     }
 
 
@@ -135,16 +147,8 @@ def _get_job(event, user_id):
     if not item:
         return response(404, {"error": {"code": "NOT_FOUND", "message": "Job not found"}})
 
-    result = {
-        "job_id": job_id,
-        "status": item.get("status", "pending"),
-        "job_type": item.get("job_type"),
-        "created_at": item.get("created_at"),
-    }
-    if item.get("status") == "completed":
-        result["result"] = item.get("result", {})
-    elif item.get("status") == "failed":
-        result["error"] = item.get("error_message", "Unknown error")
+    from shared.job_progress import public_job
+    result = public_job(item)
 
     return response(200, result)
 
@@ -161,47 +165,76 @@ def _chat_history(event, user_id):
         scan_forward=False,
     )
     items.reverse()
+    from shared.db import get_item
+    for item in items:
+        if item.get('proposals'):
+            item['proposals'] = [(get_item(f'USER#{user_id}', 'ACTION#'+p['action_id']) or p) if p.get('action_id') else p for p in item['proposals']]
+        proposal = item.get('proposal')
+        if proposal and proposal.get('action_id'):
+            saved = get_item(f"USER#{user_id}", f"ACTION#{proposal['action_id']}")
+            if saved:
+                item['proposal'] = {k:saved.get(k) for k in ('action_id','action','status')}
     messages = [
         {
             "role": item.get("role"),
             "content": item.get("content"),
             "agent": item.get("agent"),
             "timestamp": item.get("created_at"),
+            "sources": item.get("sources", []),
+            "proposal": item.get("proposal"),
+            "proposals": [{k:p.get(k) for k in ('action_id','action','status','error','result')} for p in item.get('proposals',[])],
+            "result_url": item.get("result_url"),
         }
         for item in items
     ]
     return response(200, {"messages": messages})
 
 
-def _create_session():
+def _create_session(event=None):
     import hashlib
     import secrets
     from shared.utils import generate_id, now_iso
     from shared.db import put_item
     from shared.models import build_profile
 
+    body = parse_body(event or {})
+    persona = body.get('demo_profile')
+    if persona is not None:
+        from shared.demo_workspace import PERSONAS
+        from zoneinfo import ZoneInfo
+        if not isinstance(persona,str) or persona not in PERSONAS: raise ValueError('Choose a listed demo profile.')
+        try: ZoneInfo(body.get('timezone') or 'America/Phoenix')
+        except (ValueError, KeyError, TypeError): raise ValueError('Choose a valid timezone.')
     user_id = generate_id()
     token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
 
-    profile = build_profile(user_id, onboarded=False)
-    put_item(profile)
+    if persona is not None:
+        from shared.demo_workspace import seed
+        profile = seed(user_id, persona, body.get('timezone') or 'America/Phoenix')
+    else:
+        profile = build_profile(user_id, onboarded=False)
+        put_item(profile)
 
     put_item({
         "PK": "SESSIONS",
         "SK": f"TOKEN#{token_hash}",
         "user_id": user_id,
         "created_at": now_iso(),
+        "expires_at_epoch": int(__import__("time").time()) + 86400,
     })
 
     return response(200, {
         "token": token,
         "user_id": user_id,
-        "expires_at": "2026-12-31T23:59:59Z",
+        "expires_at": __import__("datetime").datetime.fromtimestamp(__import__("time").time() + 86400, __import__("datetime").timezone.utc).isoformat(),
     })
 
 
 def handler(event, context):
+    if event.get('source') == 'vida.workflow' and event.get('detail-type') == 'StepFinished':
+        from api.routes.workflows import notification
+        return notification(event)
     try:
         method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
         raw_path = event.get("rawPath", "/")
@@ -216,7 +249,7 @@ def handler(event, context):
             return response(200, {})
 
         if method == "POST" and path == "/api/session":
-            return _create_session()
+            return _create_session(event)
 
         OAUTH_CALLBACKS = ["/api/auth/google/callback", "/api/auth/notion/callback"]
         if path in OAUTH_CALLBACKS:
@@ -240,6 +273,15 @@ def handler(event, context):
             event["_path_params"] = params
 
         result = route_handler(event, user_id)
+        if method in ('POST','PUT','PATCH','DELETE') and isinstance(result,dict) and 200 <= result.get('statusCode',500) < 300:
+            mirror_change = path.startswith(('/api/tasks','/api/habits')) or path == '/api/onboard/confirm'
+            if path.startswith('/api/actions/') and path.endswith('/confirm'):
+                from shared.db import get_item
+                action = get_item(f'USER#{user_id}', 'ACTION#'+params.get('id','')) or {}
+                mirror_change = action.get('status') == 'completed' and action.get('action',{}).get('action') in ('create_task','update_task','complete_task')
+            if mirror_change:
+                from shared.notion_mirror import request_sync
+                request_sync(user_id)
 
         if isinstance(result, dict) and "statusCode" in result:
             return result
@@ -248,6 +290,8 @@ def handler(event, context):
 
     except json.JSONDecodeError:
         return response(400, {"error": {"code": "INVALID_JSON", "message": "Request body is not valid JSON"}})
+    except ValueError as e:
+        return response(400, {"error": {"code": "VALIDATION_ERROR", "message": str(e)}})
     except Exception as e:
         logger.exception("Unhandled error")
         return response(500, {"error": {"code": "INTERNAL_ERROR", "message": "An unexpected error occurred"}})

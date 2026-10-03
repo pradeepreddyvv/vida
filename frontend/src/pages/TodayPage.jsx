@@ -1,23 +1,58 @@
 import { useState, useEffect } from 'react'
 import { api, pollJob } from '../lib/api'
-import { Play, Check, Clock, AlertTriangle, Target, Sparkles, Loader2, ChevronRight } from 'lucide-react'
+import { Play, Check, Clock, AlertTriangle, Target, Sparkles, Loader2, ChevronRight, Calendar, RefreshCw, ExternalLink } from 'lucide-react'
 
 export default function TodayPage() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
+  const [calendarStatus, setCalendarStatus] = useState(null) // null, 'not_connected', 'connected'
+  const [syncing, setSyncing] = useState(false)
+  const [syncResult, setSyncResult] = useState(null)
 
   const load = async () => {
     try {
-      const d = await api.get('/api/today')
+      const [d, intData] = await Promise.all([
+        api.get('/api/today'),
+        api.get('/api/integrations').catch(() => ({ integrations: [] })),
+      ])
       setData(d)
+      const gcal = (intData.integrations || []).find(i => i.provider === 'google_calendar')
+      setCalendarStatus(gcal?.status === 'connected' ? 'connected' : 'not_connected')
     } catch (e) {
       console.error(e)
     }
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('connected') === 'google') {
+      setCalendarStatus('connected')
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+    load()
+  }, [])
+
+  const connectCalendar = async () => {
+    try {
+      const data = await api.get('/api/auth/google')
+      if (data.url) window.location.href = data.url
+    } catch { /* error */ }
+  }
+
+  const syncCalendar = async () => {
+    setSyncing(true)
+    setSyncResult(null)
+    try {
+      const { job_id } = await api.post('/api/integrations/google/sync')
+      const result = await pollJob(job_id, { interval: 3000, maxAttempts: 20 })
+      const synced = result.result?.synced_events || 0
+      setSyncResult({ synced, replanned: !!result.result?.replan })
+      await load()
+    } catch { /* error */ }
+    setSyncing(false)
+  }
 
   const generatePlan = async () => {
     setGenerating(true)
@@ -66,6 +101,48 @@ export default function TodayPage() {
         <h1 className="text-2xl font-bold text-gray-900">{greeting()}, {data.profile_name || 'there'}!</h1>
         <p className="text-gray-500 mt-1">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
       </div>
+
+      {syncResult && (
+        <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-xl">
+          <div className="text-sm text-green-800">
+            <span className="font-medium">Synced {syncResult.synced} calendar events</span>
+            {syncResult.replanned && ' — a new draft plan has been created based on your real schedule'}
+          </div>
+        </div>
+      )}
+
+      {calendarStatus === 'not_connected' && (
+        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Calendar size={20} className="text-blue-600" />
+            <div>
+              <div className="text-sm font-medium text-blue-800">Connect Google Calendar</div>
+              <div className="text-xs text-blue-600">Import your real events for smarter AI planning</div>
+            </div>
+          </div>
+          <button onClick={connectCalendar}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
+            <ExternalLink size={14} /> Connect
+          </button>
+        </div>
+      )}
+
+      {calendarStatus === 'connected' && !syncResult && (
+        <div className="mb-6 p-4 bg-vida-50 border border-vida-200 rounded-xl flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Calendar size={20} className="text-vida-600" />
+            <div>
+              <div className="text-sm font-medium text-vida-800">Google Calendar connected</div>
+              <div className="text-xs text-vida-600">Sync your events to plan based on your real schedule</div>
+            </div>
+          </div>
+          <button onClick={syncCalendar} disabled={syncing}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-vida-600 rounded-lg hover:bg-vida-700 disabled:opacity-50 transition-colors">
+            {syncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            {syncing ? 'Syncing...' : 'Sync Now'}
+          </button>
+        </div>
+      )}
 
       {data.next_action && (
         <div className="mb-6 p-4 bg-vida-50 border border-vida-200 rounded-xl">

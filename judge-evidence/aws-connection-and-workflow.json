@@ -1,0 +1,11 @@
+{
+  "account": "237226121208",
+  "authenticated_role": "AccountFullAccessRole",
+  "region": "us-east-2",
+  "state_machine": "arn:aws:states:us-east-2:237226121208:stateMachine:Workflow-RL0OZ0CMCi2E",
+  "execution": "arn:aws:states:us-east-2:237226121208:execution:Workflow-RL0OZ0CMCi2E:a9a075a4e7da58d06baa5fb78893a8c7",
+  "status": "SUCCEEDED",
+  "started_at": "2026-10-02T23:40:12.728000-07:00",
+  "stopped_at": "2026-10-02T23:40:14.035000-07:00",
+  "scope": "Authenticated CLI evidence and successful workflow metadata; no credentials, tokens, or execution inputs included."
+}

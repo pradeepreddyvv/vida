@@ -12,6 +12,7 @@ export default function ChatPanel({ onClose }) {
   const [isListening, setIsListening] = useState(false)
   const [speechSupported, setSpeechSupported] = useState(false)
   const [speaking, setSpeaking] = useState(null)
+  const [autoSpeak, setAutoSpeak] = useState(false)
   const scrollRef = useRef(null)
   const recognitionRef = useRef(null)
   const inputRef = useRef(null)
@@ -74,18 +75,47 @@ export default function ChatPanel({ onClose }) {
     }
   }, [isListening])
 
-  const speakMessage = useCallback((text, index) => {
+  const audioRef = useRef(null)
+
+  const speakMessage = useCallback(async (text, index) => {
     if (speaking === index) {
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current = null
+      }
       window.speechSynthesis.cancel()
       setSpeaking(null)
       return
     }
+
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current = null
+    }
     window.speechSynthesis.cancel()
+    setSpeaking(index)
+
+    try {
+      const data = await api.post('/api/speech/synthesize', { text: text.slice(0, 3000) })
+      if (data.audio) {
+        const audioBlob = Uint8Array.from(atob(data.audio), c => c.charCodeAt(0))
+        const blob = new Blob([audioBlob], { type: 'audio/mpeg' })
+        const url = URL.createObjectURL(blob)
+        const audio = new Audio(url)
+        audioRef.current = audio
+        audio.onended = () => { setSpeaking(null); URL.revokeObjectURL(url) }
+        audio.onerror = () => { setSpeaking(null); URL.revokeObjectURL(url) }
+        audio.play()
+        return
+      }
+    } catch {
+      // Polly unavailable, fall back to browser TTS
+    }
+
     const utterance = new SpeechSynthesisUtterance(text)
     utterance.rate = 1.0
     utterance.onend = () => setSpeaking(null)
     utterance.onerror = () => setSpeaking(null)
-    setSpeaking(index)
     window.speechSynthesis.speak(utterance)
   }, [speaking])
 
@@ -114,6 +144,18 @@ export default function ChatPanel({ onClose }) {
     }
   }, [input, sending])
 
+  // Auto-speak last assistant message if it was just added
+  const prevMsgCount = useRef(0)
+  useEffect(() => {
+    if (messages.length > prevMsgCount.current) {
+      const last = messages[messages.length - 1]
+      if (last?.role === 'assistant' && autoSpeak) {
+        speakMessage(last.content, messages.length - 1)
+      }
+    }
+    prevMsgCount.current = messages.length
+  }, [messages.length])
+
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -141,9 +183,18 @@ export default function ChatPanel({ onClose }) {
             </span>
           )}
         </div>
-        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
-          <X size={18} />
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setAutoSpeak(a => !a)}
+            title={autoSpeak ? 'Auto-read ON (Amazon Polly)' : 'Auto-read OFF'}
+            className={`p-1 rounded transition-colors ${autoSpeak ? 'text-vida-600 bg-vida-100' : 'text-gray-400 hover:text-gray-600'}`}
+          >
+            {autoSpeak ? <Volume2 size={15} /> : <VolumeX size={15} />}
+          </button>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
+            <X size={18} />
+          </button>
+        </div>
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">

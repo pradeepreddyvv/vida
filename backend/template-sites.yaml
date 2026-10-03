@@ -1,0 +1,316 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Vida API and asynchronous Bedrock worker for the separately hosted Sites
+  interface.
+Parameters:
+  TableName:
+    Type: String
+    Default: vida-main
+  FrontendOrigin:
+    Type: String
+    Default: http://127.0.0.1:5175
+  OAuthSecretArn:
+    Type: String
+    Default: ''
+Globals:
+  Function:
+    Runtime: python3.11
+    Architectures:
+    - arm64
+    Environment:
+      Variables:
+        TABLE_NAME:
+          Ref: VidaTable
+        DOCS_BUCKET:
+          Ref: DocsBucket
+        REGION:
+          Ref: AWS::Region
+Resources:
+  VidaTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    Properties:
+      TableName:
+        Ref: TableName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: PK
+        AttributeType: S
+      - AttributeName: SK
+        AttributeType: S
+      - AttributeName: GSI1PK
+        AttributeType: S
+      - AttributeName: GSI1SK
+        AttributeType: S
+      - AttributeName: GSI2PK
+        AttributeType: S
+      - AttributeName: GSI2SK
+        AttributeType: S
+      - AttributeName: GSI3PK
+        AttributeType: S
+      - AttributeName: GSI3SK
+        AttributeType: S
+      KeySchema:
+      - AttributeName: PK
+        KeyType: HASH
+      - AttributeName: SK
+        KeyType: RANGE
+      GlobalSecondaryIndexes:
+      - IndexName: GSI1
+        KeySchema:
+        - AttributeName: GSI1PK
+          KeyType: HASH
+        - AttributeName: GSI1SK
+          KeyType: RANGE
+        Projection:
+          ProjectionType: ALL
+      - IndexName: GSI2
+        KeySchema:
+        - AttributeName: GSI2PK
+          KeyType: HASH
+        - AttributeName: GSI2SK
+          KeyType: RANGE
+        Projection:
+          ProjectionType: ALL
+      - IndexName: GSI3
+        KeySchema:
+        - AttributeName: GSI3PK
+          KeyType: HASH
+        - AttributeName: GSI3SK
+          KeyType: RANGE
+        Projection:
+          ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: expires_at_epoch
+        Enabled: true
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Durable personal data retained across stack replacement
+        must:
+        - Retain data when replacing or deleting the stack
+  DocsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      CorsConfiguration:
+        CorsRules:
+        - AllowedOrigins:
+          - Ref: FrontendOrigin
+          AllowedMethods:
+          - GET
+          - PUT
+          - POST
+          AllowedHeaders:
+          - '*'
+          MaxAge: 3600
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Durable personal data retained across stack replacement
+        must:
+        - Retain data when replacing or deleting the stack
+  VidaApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: ${AWS::StackName}-api
+      Handler: api.handler.handler
+      CodeUri: functions/
+      MemorySize: 256
+      Timeout: 29
+      Environment:
+        Variables:
+          AI_FUNCTION_NAME:
+            Ref: VidaAiFunction
+          BEDROCK_MODEL_ID: amazon.nova-lite-v1:0
+          OAUTH_SECRET_ARN:
+            Ref: OAuthSecretArn
+          FRONTEND_URL:
+            Ref: FrontendOrigin
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: VidaTable
+      - S3CrudPolicy:
+          BucketName:
+            Ref: DocsBucket
+      - Statement:
+        - Effect: Allow
+          Action: lambda:InvokeFunction
+          Resource:
+            Fn::GetAtt:
+            - VidaAiFunction
+            - Arn
+      - Statement:
+        - Effect: Allow
+          Action:
+          - polly:SynthesizeSpeech
+          - transcribe:StartStreamTranscription
+          Resource: '*'
+      - Fn::If:
+        - HasOAuthSecret
+        - Statement:
+          - Effect: Allow
+            Action: secretsmanager:GetSecretValue
+            Resource:
+              Ref: OAuthSecretArn
+        - Ref: AWS::NoValue
+      Events:
+        CatchAll:
+          Type: HttpApi
+          Properties:
+            ApiId:
+              Ref: VidaHttpApi
+            Path: /api/{proxy+}
+            Method: ANY
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Separate quick API responses from bounded asynchronous AI and import
+          jobs
+        must:
+        - Resolve OAuth credentials at runtime; never embed plaintext secrets
+  VidaAiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: ${AWS::StackName}-ai
+      Handler: ai.handler.handler
+      CodeUri: functions/
+      MemorySize: 512
+      Timeout: 180
+      Environment:
+        Variables:
+          BEDROCK_MODEL_ID: amazon.nova-lite-v1:0
+          OAUTH_SECRET_ARN:
+            Ref: OAuthSecretArn
+          FRONTEND_URL:
+            Ref: FrontendOrigin
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: VidaTable
+      - S3CrudPolicy:
+          BucketName:
+            Ref: DocsBucket
+      - Statement:
+        - Effect: Allow
+          Action:
+          - bedrock:InvokeModel
+          - bedrock:InvokeModelWithResponseStream
+          Resource: arn:aws:bedrock:*::foundation-model/*
+      - Statement:
+        - Effect: Allow
+          Action:
+          - polly:SynthesizeSpeech
+          Resource: '*'
+      - Statement:
+        - Effect: Allow
+          Action:
+          - transcribe:StartStreamTranscription
+          Resource: '*'
+      - Fn::If:
+        - HasOAuthSecret
+        - Statement:
+          - Effect: Allow
+            Action: secretsmanager:GetSecretValue
+            Resource:
+              Ref: OAuthSecretArn
+        - Ref: AWS::NoValue
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
+        MaximumEventAgeInSeconds: 120
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Separate quick API responses from bounded asynchronous AI and import
+          jobs
+        must:
+        - Resolve OAuth credentials at runtime; never embed plaintext secrets
+  VidaHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: prod
+      CorsConfiguration:
+        AllowOrigins:
+        - Ref: FrontendOrigin
+        AllowHeaders:
+        - Content-Type
+        - Authorization
+        AllowMethods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+  DocsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: DocsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Deny
+          Principal: '*'
+          Action: s3:*
+          Resource:
+          - Fn::GetAtt:
+            - DocsBucket
+            - Arn
+          - Fn::Sub: ${DocsBucket.Arn}/*
+          Condition:
+            Bool:
+              aws:SecureTransport: 'false'
+  VidaApiFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/lambda/${AWS::StackName}-api
+      RetentionInDays: 7
+  VidaAiFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/lambda/${AWS::StackName}-ai
+      RetentionInDays: 7
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint
+    Value:
+      Fn::Sub: https://${VidaHttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod
+  AiFunctionName:
+    Description: AI worker Lambda function name
+    Value:
+      Ref: VidaAiFunction
+  DocsBucketName:
+    Description: Private document bucket
+    Value:
+      Ref: DocsBucket
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    arch: Sites frontend -> HTTP API -> API Lambda + async AI Lambda; DynamoDB records
+      and private document storage
+    must:
+    - Do not deploy the legacy frontend resources in this stack
+    - Secrets are supplied through a separate Secrets Manager entry
+Conditions:
+  HasOAuthSecret:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: OAuthSecretArn
+      - ''

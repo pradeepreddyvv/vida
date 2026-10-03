@@ -28,8 +28,30 @@ export default function OnboardingPage({ onComplete }) {
   const [inputMode, setInputMode] = useState(null) // null, 'file', 'text', 'skip'
   const [textInput, setTextInput] = useState('')
   const [skipName, setSkipName] = useState('')
+  const [calendarConnected, setCalendarConnected] = useState(false)
+  const [connectingCalendar, setConnectingCalendar] = useState(false)
   const fileInputRef = useRef(null)
   const dropRef = useRef(null)
+
+  const connectGoogleCalendar = async () => {
+    setConnectingCalendar(true)
+    try {
+      const data = await api.get('/api/auth/google')
+      if (data.url) window.location.href = data.url
+    } catch {
+      setError('Failed to start Google Calendar connection')
+      setConnectingCalendar(false)
+    }
+  }
+
+  // Check if returning from OAuth callback
+  useState(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('connected') === 'google') {
+      setCalendarConnected(true)
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  })
 
   const handleDragOver = useCallback((e) => {
     e.preventDefault()
@@ -318,14 +340,24 @@ export default function OnboardingPage({ onComplete }) {
                   <h3 className="text-lg font-semibold text-gray-800 mb-1">Connect Your Tools</h3>
                   <p className="text-sm text-gray-500 mb-4">Let Vida pull in your existing schedule and notes for smarter planning.</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <button disabled className="flex items-center gap-4 p-4 rounded-xl border-2 border-gray-200 text-left opacity-50 cursor-not-allowed relative">
-                      <Calendar size={28} className="text-blue-500 flex-shrink-0" />
-                      <div>
-                        <div className="text-sm font-semibold text-gray-700">Google Calendar</div>
-                        <div className="text-xs text-gray-400">Import events, deadlines, and meetings</div>
+                    {calendarConnected ? (
+                      <div className="flex items-center gap-4 p-4 rounded-xl border-2 border-green-300 bg-green-50 text-left">
+                        <Check size={28} className="text-green-600 flex-shrink-0" />
+                        <div>
+                          <div className="text-sm font-semibold text-green-700">Google Calendar Connected</div>
+                          <div className="text-xs text-green-600">Your events will sync when you finish onboarding</div>
+                        </div>
                       </div>
-                      <span className="absolute top-2 right-2 text-[10px] bg-gray-200 text-gray-500 px-2 py-0.5 rounded-full font-medium">Soon</span>
-                    </button>
+                    ) : (
+                      <button onClick={connectGoogleCalendar} disabled={connectingCalendar}
+                        className="flex items-center gap-4 p-4 rounded-xl border-2 border-blue-200 hover:border-blue-400 hover:bg-blue-50/30 transition-all text-left">
+                        {connectingCalendar ? <Loader2 size={28} className="text-blue-500 flex-shrink-0 animate-spin" /> : <Calendar size={28} className="text-blue-500 flex-shrink-0" />}
+                        <div>
+                          <div className="text-sm font-semibold text-gray-800">Google Calendar</div>
+                          <div className="text-xs text-gray-500">Import events, deadlines, and meetings</div>
+                        </div>
+                      </button>
+                    )}
                     <button disabled className="flex items-center gap-4 p-4 rounded-xl border-2 border-gray-200 text-left opacity-50 cursor-not-allowed relative">
                       <BookOpen size={28} className="text-gray-700 flex-shrink-0" />
                       <div>

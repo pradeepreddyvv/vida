@@ -12,6 +12,10 @@ def list_documents(event, user_id):
         doc_id = item["SK"].replace("DOC#", "")
         docs.append({
             "doc_id": doc_id,
+            "source": item.get("source"),
+            "notion_id": item.get("notion_id"),
+            "goal_id": item.get("goal_id"),
+            "text": item.get("extracted_text", "") if item.get("source") == "note" else "",
             "file_name": item.get("file_name"),
             "file_type": item.get("file_type"),
             "file_size_bytes": item.get("file_size_bytes", 0),
@@ -62,6 +66,10 @@ def create_document(event, user_id):
     if not doc_id:
         return response(400, {"error": {"code": "VALIDATION_ERROR", "message": "doc_id is required"}})
 
+    s3_key = body.get("s3_key", "")
+    if not s3_key.startswith(f"uploads/{user_id}/{doc_id}/"):
+        return response(400, {"error": {"message": "Invalid document ownership"}})
+
     item = build_document(
         user_id,
         doc_id=doc_id,
@@ -78,3 +86,20 @@ def create_document(event, user_id):
         "file_name": body.get("file_name"),
         "kb_status": "pending",
     })
+
+
+def create_note(event, user_id):
+    from shared.db import get_item
+    body = parse_body(event)
+    title = str(body.get('title', '')).strip()
+    text = str(body.get('text', '')).strip()
+    project = body.get('goal_id')
+    if not title or not text or len(text.encode('utf-8')) > 100000:
+        raise ValueError('A note needs a title and text (up to 100 KB).')
+    if project and not get_item(f'USER#{user_id}', f'GOAL#{project}'):
+        raise ValueError('Project not found')
+    doc_id = generate_id()
+    item = build_document(user_id, doc_id=doc_id, file_name=title, file_type='note', extracted_text=text, kb_status='indexed')
+    item.update(source='note', goal_id=project)
+    put_item(item)
+    return response(201, {'doc_id':doc_id, 'title':title, 'kb_status':'indexed'})

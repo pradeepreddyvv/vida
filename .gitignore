@@ -35,3 +35,14 @@ backend/functions/ai/shared/
 *.key
 *.secret
 local/
+
+# Local configuration and private development evidence
+.env.*
+!.env.example
+/*.png
+/*.jpg
+/*.jpeg
+*.log
+*.zip
+*.sqlite
+*.db

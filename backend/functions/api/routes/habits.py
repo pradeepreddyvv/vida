@@ -5,7 +5,7 @@ from shared.utils import response, parse_body, get_path_param, get_query_param, 
 
 def list_habits(event, user_id):
     habits = query_pk(f"USER#{user_id}", sk_prefix="HABIT#")
-    date = get_query_param(event, "date", today_str())
+    date = get_query_param(event, "date", today_str(user_id))
     logs = query_pk(f"USER#{user_id}", sk_prefix=f"HABITLOG#{date}#")
     log_map = {}
     for log in logs:
@@ -65,7 +65,7 @@ def update_habit(event, user_id):
 def log_habit(event, user_id):
     habit_id = get_path_param(event, "id")
     body = parse_body(event)
-    date = body.get("date", today_str())
+    date = body.get("date", today_str(user_id))
     completed = body.get("completed", True)
 
     existing = get_item(f"USER#{user_id}", f"HABIT#{habit_id}")
