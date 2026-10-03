@@ -52,3 +52,4 @@ No measured human-user benefit study, guaranteed success for arbitrary prompts, 
 - The repaired shopping-list lookup returned the saved grocery items with three source references, without another action proposal. The earlier erroneous proposal was never approved.
 
 The raw AWS connection file demonstrates authenticated CLI access and execution status. It is not a substitute for any specifically required AWS Console connection screenshot.
+- Clean final browser rerun: starter → five pending approvals → five completed changes → refresh → “What's on my shopping list?” returned “Eggs, milk, rice, spinach, and bananas [S1][S2].” No extra action proposal or error appeared. `04-saved-context.png` records this answer.
